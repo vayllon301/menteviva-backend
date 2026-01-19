@@ -55,11 +55,6 @@ def get_weather(city: str = "Madrid", country_code: str = "ES"):
             "humedad": current.get("humidity", 0),
             "presion": round(current.get("pressure_mb", 0)),
             "viento_velocidad": round(current.get("wind_kph", 0), 1),
-            "viento_direccion": current.get("wind_degree", 0),
-            "visibilidad": round(current.get("vis_km", 0), 1),
-            "nubosidad": current.get("cloud", 0),
-            "amanecer": None,  # WeatherAPI no proporciona amanecer/atardecer en el plan gratuito
-            "atardecer": None,
             "fecha_actualizacion": location.get("localtime", None)
         }
         
@@ -99,51 +94,33 @@ def get_weather(city: str = "Madrid", country_code: str = "ES"):
 
 def format_weather_for_chat(weather_data: dict) -> str:
     """
-    Formatea la información del clima en un formato legible para el chatbot.
+    Formatea la información del clima para que el chatbot lo interprete y lo presente de forma natural.
     
     Args:
         weather_data: Diccionario con la información del clima obtenida
         
     Returns:
-        String formateado con la información del clima
+        String con datos formateados para que el chatbot lo presente de forma natural
     """
     if weather_data.get("error"):
-        return f"Lo siento, no pude obtener la información del clima. {weather_data['error']}"
+        return f"Error al obtener el clima: {weather_data['error']}"
     
     weather = weather_data.get("weather")
     if not weather:
-        return "No se pudo obtener la información del clima en este momento."
+        return "No se pudo obtener la información del clima."
     
-    formatted_text = f"🌤️ Clima actual en {weather['ciudad']}, {weather['pais']}:\n\n"
-    formatted_text += f"🌡️ Temperatura: {weather['temperatura']}°C\n"
-    formatted_text += f"💨 Sensación térmica: {weather['sensacion_termica']}°C\n"
-    formatted_text += f"☁️ Condiciones: {weather['descripcion']}\n"
-    formatted_text += f"💧 Humedad: {weather['humedad']}%\n"
+    # Crear un resumen conciso de los datos para que el chatbot lo interprete
+    resumen = (
+        f"Ciudad: {weather['ciudad']}, {weather['pais']}\n"
+        f"Temperatura: {weather['temperatura']}°C (sensación térmica: {weather['sensacion_termica']}°C)\n"
+        f"Condiciones: {weather['descripcion']}\n"
+        f"Humedad: {weather['humedad']}%\n"
+        f"Viento: {weather['viento_velocidad']} km/h"
+    )
     
-    if weather.get('presion'):
-        formatted_text += f"🔽 Presión: {weather['presion']} mb\n"
     
-    formatted_text += f"🌬️ Viento: {weather['viento_velocidad']} km/h"
-    
-    if weather.get('viento_direccion') is not None:
-        directions = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", 
-                     "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
-        direction_index = int((weather['viento_direccion'] + 11.25) / 22.5) % 16
-        formatted_text += f" ({directions[direction_index]})"
-    
-    formatted_text += "\n"
-    
-    if weather.get('visibilidad'):
-        formatted_text += f"👁️ Visibilidad: {weather['visibilidad']} km\n"
-    
-    formatted_text += f"☁️ Nubosidad: {weather['nubosidad']}%\n"
-    
-    # Solo mostrar amanecer/atardecer si están disponibles
-    if weather.get('amanecer') and weather.get('atardecer'):
-        formatted_text += f"🌅 Amanecer: {weather['amanecer']}\n"
-        formatted_text += f"🌇 Atardecer: {weather['atardecer']}\n"
     
     if weather.get('fecha_actualizacion'):
-        formatted_text += f"\n📅 Última actualización: {weather['fecha_actualizacion']}"
+        resumen += f"\nÚltima actualización: {weather['fecha_actualizacion']}"
     
-    return formatted_text.strip()
+    return resumen
