@@ -1,2 +1,13 @@
 .env
 .azure/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.log
+
+# Local virtual envs
+.venv/
+venv/
+antenv/
