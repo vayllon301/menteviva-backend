@@ -54,7 +54,7 @@ def cv(message: str):
             if msg.role == "assistant":
                 return msg.content[0].text
         
-        return "No response from assistant"
+        return "No hubo respuesta del asistente"
         
     except Exception as e:
         return f"Error: {str(e)}"
