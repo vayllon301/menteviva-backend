@@ -2,10 +2,15 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from chatbot import chatbot
 from cv import cv as cv_assistant
+from quote import quote as quote_assistant, QuoteResponse
 from news import get_spain_news, format_news_for_chat
 from weather import get_weather, format_weather_for_chat
 
 app = FastAPI()
+
+class QuoteRequest(BaseModel):
+    description: str
+    interests: list[str]
 
 class ChatRequest(BaseModel):
     message: str
@@ -28,6 +33,12 @@ async def chat(request: ChatRequest):
 async def cv(request: ChatRequest):
     response = cv_assistant(request.message)
     return {"response": response}
+
+
+@app.post("/quote")
+async def quote(request: QuoteRequest) -> QuoteResponse:
+    response = quote_assistant(request.description, request.interests)
+    return response
 
 @app.get("/news")
 async def news(limit: int = 10):
@@ -91,3 +102,5 @@ async def weather_formatted(city: str = "Madrid", country_code: str = "ES"):
     weather_data = get_weather(city=city, country_code=country_code)
     formatted_text = format_weather_for_chat(weather_data)
     return {"response": formatted_text}
+
+
