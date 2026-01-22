@@ -7,8 +7,10 @@ from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from dotenv import load_dotenv
 import os
+from datetime import datetime
 from news import get_spain_news, format_news_for_chat
 from weather import get_weather, format_weather_for_chat
+from spanish_newspapers import get_combined_news, format_newspapers_for_chat, get_newspapers_by_source
 
 load_dotenv()
 
@@ -45,8 +47,30 @@ def obtener_clima(ciudad: str = "Barcelona") -> str:
     weather_data = get_weather(city=ciudad, country_code="ES")
     return format_weather_for_chat(weather_data)
 
+@tool
+def obtener_noticias_periodicos(limite_por_fuente: int = 5, periodico: str = "ambos") -> str:
+    """
+    Obtiene las noticias más recientes directamente de los periódicos El País y El Mundo.
+    Esta herramienta accede a las fuentes originales de estos periódicos.
+    Usa esta herramienta cuando el usuario específicamente pida noticias de estos periódicos
+    o cuando quiera noticias actualizadas de fuentes confiables españolas.
+    
+    Args:
+        limite_por_fuente: Número de noticias a obtener de cada periódico (por defecto 5)
+        periodico: Qué periódico consultar: "ambos" (defecto), "elpais", o "elmundo"
+    
+    Returns:
+        Noticias actualizadas formateadas con la fecha de hoy, listas para presentar al usuario
+    """
+    if periodico.lower() == "ambos":
+        news_data = get_combined_news(limit_per_source=limite_por_fuente)
+    else:
+        news_data = get_newspapers_by_source(source=periodico, limit=limite_por_fuente * 2)
+    
+    return format_newspapers_for_chat(news_data)
+
 # Define the list of tools
-tools = [obtener_noticias, obtener_clima]
+tools = [obtener_noticias, obtener_clima, obtener_noticias_periodicos]
 
 class State(TypedDict):
     # Messages are appended to the list using add_messages
@@ -60,9 +84,23 @@ def chatbot_node(state: State):
     # Bind tools to the LLM so it knows it can call them
     llm_with_tools = llm.bind_tools(tools)
     
+    # Obtener la fecha actual en español
+    today = datetime.now()
+    days_es = {
+        0: "Lunes", 1: "Martes", 2: "Miércoles",
+        3: "Jueves", 4: "Viernes", 5: "Sábado", 6: "Domingo"
+    }
+    months_es = {
+        1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+        5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+        9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+    }
+    today_str = f"{days_es[today.weekday()]}, {today.day} de {months_es[today.month]} de {today.year}"
+    
     system_message = {
         "role": "system",
         "content": (
+            f"FECHA ACTUAL: {today_str}\n\n"
             "Eres MenteViva, un asistente de IA paciente, respetuoso y cálido, diseñado específicamente para ayudar a personas mayores. "
             "Tu objetivo es brindar compañía, ayudar con las tareas diarias y fomentar la salud cognitiva.\n\n"
             "Al interactuar:\n"
@@ -80,9 +118,15 @@ def chatbot_node(state: State):
             "- Incluye consejos prácticos: qué ropa usar, si llevar paraguas, si es buen día para pasear, etc.\n"
             "- Sé conciso: no abrumes con todos los datos técnicos (presión, nubosidad, etc.).\n"
             "- Ejemplo: En lugar de listar todos los números, di algo como: 'Hace 18 grados y está parcialmente nublado. Sería un buen día para dar un paseo, pero lleva un abrigo ligero.'\n\n"
+            "CUANDO EL USUARIO PREGUNTA SOBRE NOTICIAS:\n"
+            "- Si pide noticias de El País, El Mundo, o de periódicos específicos, usa la herramienta obtener_noticias_periodicos.\n"
+            "- Si pide noticias generales de España, puedes usar obtener_noticias o obtener_noticias_periodicos.\n"
+            "- Las noticias de obtener_noticias_periodicos son directamente de las fuentes originales y están actualizadas.\n"
+            "- Siempre menciona que las noticias son del día de hoy para dar contexto temporal.\n\n"
             "HERRAMIENTAS DISPONIBLES:\n"
-            "- Puedes consultar las noticias más recientes de España cuando el usuario lo pida.\n"
-            "- Puedes consultar el clima actual de cualquier ciudad de España cuando el usuario lo pida.\n"
+            "- obtener_noticias: Noticias generales de España desde NewsAPI\n"
+            "- obtener_noticias_periodicos: Noticias directas de El País y El Mundo (RSS feeds actualizados)\n"
+            "- obtener_clima: Clima actual de cualquier ciudad de España\n"
             "- Usa estas herramientas de manera proactiva cuando sea apropiado para ayudar al usuario.\n"
         )
     }

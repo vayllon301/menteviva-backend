@@ -4,3 +4,6 @@ langchain-openai
 python-dotenv
 openai
 requests
+feedparser
+beautifulsoup4
+lxml

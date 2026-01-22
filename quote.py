@@ -10,6 +10,7 @@ class Quote(BaseModel):
     quote: str
     author: str
     location: str
+    interpretation: str
 
 class QuoteResponse(BaseModel):
     quotes: list[Quote]
@@ -23,7 +24,7 @@ def quote(description: str, interests: list[str]) -> QuoteResponse:
         messages=[
             {
                 "role": "system",
-                "content": "You are a quote generator. You will generate a list of quotes with the author and location of the author for the user given a description of the topic and interests. Return exactly 3 quotes.",
+                "content": "You are a quote generator. You will generate a list of quotes with the author, location of the author and an interpretation of the quote for the user. You will be given a description of the topic and a list of interests. Return exactly 5 quotes.",
             },
             {"role": "user", "content": user_message},
         ],

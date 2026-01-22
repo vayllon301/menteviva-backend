@@ -5,6 +5,13 @@ from cv import cv as cv_assistant
 from quote import quote as quote_assistant, QuoteResponse
 from news import get_spain_news, format_news_for_chat
 from weather import get_weather, format_weather_for_chat
+from spanish_newspapers import (
+    get_combined_news, 
+    format_newspapers_for_chat, 
+    get_newspapers_by_source,
+    get_elpais_news,
+    get_elmundo_news
+)
 
 app = FastAPI()
 
@@ -103,4 +110,77 @@ async def weather_formatted(city: str = "Madrid", country_code: str = "ES"):
     formatted_text = format_weather_for_chat(weather_data)
     return {"response": formatted_text}
 
+@app.get("/newspapers")
+async def newspapers(source: str = "ambos", limit: int = 5):
+    """
+    Obtiene noticias recientes directamente de El País y El Mundo.
+    
+    Args:
+        source: Fuente de noticias - "ambos" (defecto), "elpais", o "elmundo"
+        limit: Número de noticias por fuente (por defecto 5, si es "ambos" obtiene 5 de cada uno)
+    
+    Returns:
+        JSON con las noticias actualizadas de los periódicos
+    """
+    if source.lower() == "ambos":
+        news_data = get_combined_news(limit_per_source=limit)
+    else:
+        news_data = get_newspapers_by_source(source=source, limit=limit)
+    
+    return news_data
 
+@app.get("/newspapers/formatted")
+async def newspapers_formatted(source: str = "ambos", limit: int = 5):
+    """
+    Obtiene noticias de los periódicos formateadas para chat.
+    
+    Args:
+        source: Fuente de noticias - "ambos" (defecto), "elpais", o "elmundo"
+        limit: Número de noticias por fuente (por defecto 5)
+    
+    Returns:
+        String formateado con las noticias listo para mostrar
+    """
+    if source.lower() == "ambos":
+        news_data = get_combined_news(limit_per_source=limit)
+    else:
+        news_data = get_newspapers_by_source(source=source, limit=limit)
+    
+    formatted_text = format_newspapers_for_chat(news_data)
+    return {"response": formatted_text}
+
+@app.get("/newspapers/elpais")
+async def elpais_only(limit: int = 10):
+    """
+    Obtiene noticias solo de El País.
+    
+    Args:
+        limit: Número de noticias (por defecto 10)
+    
+    Returns:
+        JSON con las noticias de El País
+    """
+    news = get_elpais_news(limit=limit)
+    return {
+        "total": len(news),
+        "fuente": "El País",
+        "news": news
+    }
+
+@app.get("/newspapers/elmundo")
+async def elmundo_only(limit: int = 10):
+    """
+    Obtiene noticias solo de El Mundo.
+    
+    Args:
+        limit: Número de noticias (por defecto 10)
+    
+    Returns:
+        JSON con las noticias de El Mundo
+    """
+    news = get_elmundo_news(limit=limit)
+    return {
+        "total": len(news),
+        "fuente": "El Mundo",
+        "news": news
+    }
