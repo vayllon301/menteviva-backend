@@ -18,6 +18,7 @@ app = FastAPI()
 class QuoteRequest(BaseModel):
     description: str
     interests: list[str]
+    style: str
 
 class ChatRequest(BaseModel):
     message: str
