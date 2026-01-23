@@ -19,6 +19,7 @@ class QuoteRequest(BaseModel):
     description: str
     interests: list[str]
     style: str
+    language: str
 
 class ChatRequest(BaseModel):
     message: str
