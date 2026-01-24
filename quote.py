@@ -54,7 +54,7 @@ def quote(description: str, interests: list[str]) -> QuoteResponse:
         messages=[
             {
                 "role": "system",
-                "content": "You are a quote generator. You will generate a list of quotes with the author, location of the author and an interpretation of the quote for the user. You will be given a description of the topic, a style of the quote, a list of interests and the language to generate them in. Return exactly 5 quotes in the language provided.",
+                "content": "You are a quote generator. You will generate a list of quotes with the author, location of the author and an interpretation of the quote for the user. You will be given a description of the topic, a style of the quote, a list of interests and the language to generate them in. Return exactly 5 quotes in the language provided. Make sure the quotes are in the language the user selected.",
             },
             {"role": "user", "content": user_message},
         ],
