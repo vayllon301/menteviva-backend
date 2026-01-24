@@ -1,4 +1,5 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from chatbot import chatbot
 from cv import cv as cv_assistant
@@ -12,6 +13,8 @@ from spanish_newspapers import (
     get_elpais_news,
     get_elmundo_news
 )
+from voice import process_voice_message
+from io import BytesIO
 
 app = FastAPI()
 
@@ -186,3 +189,65 @@ async def elmundo_only(limit: int = 10):
         "fuente": "El Mundo",
         "news": news
     }
+
+@app.post("/voice")
+async def voice(
+    audio: UploadFile = File(...),
+    voice: str = "nova"
+):
+    """
+    Procesa entrada de voz a través del chatbot y retorna respuesta en audio.
+    
+    Pipeline completo:
+    1. Recibe archivo de audio del frontend
+    2. Transcribe audio a texto (Speech-to-Text con Whisper)
+    3. Procesa el texto a través del chatbot MenteViva
+    4. Convierte la respuesta a audio (Text-to-Speech)
+    5. Retorna el audio generado
+    
+    Args:
+        audio: Archivo de audio (webm, mp3, wav, etc.)
+        voice: Voz a usar para TTS - opciones: alloy, echo, fable, onyx, nova (default), shimmer
+               'nova' es una voz cálida y amigable, ideal para usuarios mayores
+    
+    Returns:
+        Audio MP3 con la respuesta del chatbot
+    """
+    try:
+        # Validar el tipo de archivo
+        if not audio.content_type or not audio.content_type.startswith('audio'):
+            # Permitir también video/webm que es común para grabaciones de navegador
+            if not audio.content_type.startswith('video'):
+                raise HTTPException(
+                    status_code=400, 
+                    detail="El archivo debe ser de tipo audio o video/webm"
+                )
+        
+        # Leer el archivo de audio
+        audio_bytes = await audio.read()
+        
+        # Validar que el archivo no esté vacío
+        if len(audio_bytes) == 0:
+            raise HTTPException(status_code=400, detail="El archivo de audio está vacío")
+        
+        # Procesar a través del pipeline completo
+        response_audio, transcribed_text, chatbot_response = process_voice_message(
+            audio_bytes, 
+            voice=voice
+        )
+        
+        # Retornar el audio como streaming response
+        audio_stream = BytesIO(response_audio)
+        
+        return StreamingResponse(
+            audio_stream,
+            media_type="audio/mpeg",
+            headers={
+                "Content-Disposition": "attachment; filename=response.mp3",
+                "X-Transcribed-Text": transcribed_text,  # Optional: include transcription in header
+                "X-Chatbot-Response": chatbot_response[:200]  # Optional: truncated text response
+            }
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error procesando audio: {str(e)}")
