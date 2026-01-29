@@ -3,6 +3,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from chatbot import chatbot
 from cv import cv as cv_assistant
+from blanca import blanca as blanca_assistant
 from quote import quote as quote_assistant, QuoteResponse
 from news import get_spain_news, format_news_for_chat
 from weather import get_weather, format_weather_for_chat
@@ -45,6 +46,12 @@ async def chat(request: ChatRequest):
 @app.post("/cv")
 async def cv(request: ChatRequest):
     response = cv_assistant(request.message)
+    return {"response": response}
+
+
+@app.post("/blanca")
+async def blanca(request: ChatRequest):
+    response = blanca_assistant(request.message)
     return {"response": response}
 
 
