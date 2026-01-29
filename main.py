@@ -15,6 +15,7 @@ from spanish_newspapers import (
 )
 from voice import process_voice_message
 from io import BytesIO
+import base64
 
 app = FastAPI()
 
@@ -236,18 +237,15 @@ async def voice(
             voice=voice
         )
         
-        # Retornar el audio como streaming response
-        audio_stream = BytesIO(response_audio)
-        
-        return StreamingResponse(
-            audio_stream,
-            media_type="audio/mpeg",
-            headers={
-                "Content-Disposition": "attachment; filename=response.mp3",
-                "X-Transcribed-Text": transcribed_text,  # Optional: include transcription in header
-                "X-Chatbot-Response": chatbot_response[:200]  # Optional: truncated text response
-            }
-        )
+        # Encode audio as base64 and return JSON with full response
+        audio_base64 = base64.b64encode(response_audio).decode("utf-8")
+
+        return {
+            "text": transcribed_text,
+            "response": chatbot_response,
+            "audio": audio_base64,
+            "audioType": "audio/mpeg"
+        }
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error procesando audio: {str(e)}")
