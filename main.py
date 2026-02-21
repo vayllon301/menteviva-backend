@@ -1,3 +1,4 @@
+from typing import Optional, List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -15,6 +16,7 @@ from spanish_newspapers import (
     get_elmundo_news
 )
 from voice import process_voice_message
+from alert import send_whatsapp_alert
 from io import BytesIO
 import base64
 
@@ -22,9 +24,13 @@ app = FastAPI()
 
 class QuoteRequest(BaseModel):
     description: str
-    interests: list[str]
+    interests: List[str]
     style: str
     language: str
+
+class AlertRequest(BaseModel):
+    message: str
+    to: Optional[str] = None
 
 class ChatRequest(BaseModel):
     message: str
@@ -197,6 +203,22 @@ async def elmundo_only(limit: int = 10):
         "fuente": "El Mundo",
         "news": news
     }
+
+@app.post("/alert")
+async def alert(request: AlertRequest):
+    """
+    Envía una alerta por WhatsApp usando Twilio.
+
+    Args:
+        request: JSON con 'message' (obligatorio) y 'to' (opcional, formato 'whatsapp:+34XXXXXXXXX')
+
+    Returns:
+        JSON con el resultado del envío
+    """
+    result = send_whatsapp_alert(message=request.message, to=request.to)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
 
 @app.post("/voice")
 async def voice(

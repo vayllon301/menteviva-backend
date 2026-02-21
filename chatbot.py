@@ -11,6 +11,7 @@ from datetime import datetime
 from news import get_spain_news, format_news_for_chat
 from weather import get_weather, format_weather_for_chat
 from spanish_newspapers import get_combined_news, format_newspapers_for_chat, get_newspapers_by_source
+from alert import send_whatsapp_alert
 
 load_dotenv()
 
@@ -69,8 +70,27 @@ def obtener_noticias_periodicos(limite_por_fuente: int = 5, periodico: str = "am
     
     return format_newspapers_for_chat(news_data)
 
+@tool
+def enviar_alerta_whatsapp(mensaje: str) -> str:
+    """
+    Envía una alerta o mensaje importante por WhatsApp al cuidador o familiar del usuario.
+    Usa esta herramienta cuando el usuario pida enviar un mensaje, alerta o aviso por WhatsApp,
+    o cuando detectes una situación que requiera notificar a alguien (emergencia, recordatorio importante, etc.).
+
+    Args:
+        mensaje: El texto del mensaje a enviar por WhatsApp
+
+    Returns:
+        Confirmación del envío o mensaje de error
+    """
+    result = send_whatsapp_alert(message=mensaje)
+    if result.get("error"):
+        return f"No se pudo enviar la alerta: {result['error']}"
+    alert_info = result["alert"]
+    return f"Alerta enviada correctamente por WhatsApp al número {alert_info['destino']}."
+
 # Define the list of tools
-tools = [obtener_noticias, obtener_clima, obtener_noticias_periodicos]
+tools = [obtener_noticias, obtener_clima, obtener_noticias_periodicos, enviar_alerta_whatsapp]
 
 class State(TypedDict):
     # Messages are appended to the list using add_messages
@@ -123,10 +143,15 @@ def chatbot_node(state: State):
             "- Si pide noticias generales de España, puedes usar obtener_noticias o obtener_noticias_periodicos.\n"
             "- Las noticias de obtener_noticias_periodicos son directamente de las fuentes originales y están actualizadas.\n"
             "- Siempre menciona que las noticias son del día de hoy para dar contexto temporal.\n\n"
+            "CUANDO EL USUARIO PIDE ENVIAR UNA ALERTA O MENSAJE POR WHATSAPP:\n"
+            "- Usa la herramienta enviar_alerta_whatsapp para enviar el mensaje.\n"
+            "- Confirma al usuario que el mensaje ha sido enviado correctamente.\n"
+            "- Si hay un error, informa al usuario de forma amable y sugiere intentarlo de nuevo.\n\n"
             "HERRAMIENTAS DISPONIBLES:\n"
             "- obtener_noticias: Noticias generales de España desde NewsAPI\n"
             "- obtener_noticias_periodicos: Noticias directas de El País y El Mundo (RSS feeds actualizados)\n"
             "- obtener_clima: Clima actual de cualquier ciudad de España\n"
+            "- enviar_alerta_whatsapp: Envía una alerta o mensaje por WhatsApp al cuidador o familiar\n"
             "- Usa estas herramientas de manera proactiva cuando sea apropiado para ayudar al usuario.\n"
         )
     }
