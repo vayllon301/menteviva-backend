@@ -93,18 +93,11 @@ def enviar_alerta_whatsapp(mensaje: str) -> str:
 tools = [obtener_noticias, obtener_clima, obtener_noticias_periodicos, enviar_alerta_whatsapp]
 
 class State(TypedDict):
-    # Messages are appended to the list using add_messages
     messages: Annotated[list, add_messages]
+    user_profile: dict
 
-def chatbot_node(state: State):
-    # Initialize the LLM with the API key from environment
-    # langchain-openai looks for OPENAI_API_KEY by default
-    llm = ChatOpenAI(model="gpt-5-nano")
-    
-    # Bind tools to the LLM so it knows it can call them
-    llm_with_tools = llm.bind_tools(tools)
-    
-    # Obtener la fecha actual en español
+def build_system_message(user_profile: dict = None):
+    """Build the system message, optionally personalized with user profile."""
     today = datetime.now()
     days_es = {
         0: "Lunes", 1: "Martes", 2: "Miércoles",
@@ -116,49 +109,69 @@ def chatbot_node(state: State):
         9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
     }
     today_str = f"{days_es[today.weekday()]}, {today.day} de {months_es[today.month]} de {today.year}"
-    
-    system_message = {
-        "role": "system",
-        "content": (
-            f"FECHA ACTUAL: {today_str}\n\n"
-            "Eres MenteViva, un asistente de IA paciente, respetuoso y cálido, diseñado específicamente para ayudar a personas mayores. "
-            "Tu objetivo es brindar compañía, ayudar con las tareas diarias y fomentar la salud cognitiva.\n\n"
-            "Al interactuar:\n"
-            "1. Usa un lenguaje claro y sencillo, evita tecnicismos.\n"
-            "2. Sé extremadamente paciente y alentador.\n"
-            "3. Si el usuario parece confundido, ofrece orientación amable.\n"
-            "4. Habla con un tono cálido y respetuoso. Usa un trato formal y educado.\n"
-            "5. Ofrece recordatorios de hábitos saludables como beber agua, dar un paseo corto o hacer un rompecabezas.\n"
-            "6. Si te preguntan sobre consejos médicos, recuerda siempre consultar con su médico o un profesional.\n"
-            "7. Mantén las respuestas concisas pero amigables para no abrumar al usuario.\n\n"
-            "CUANDO EL USUARIO PREGUNTA SOBRE EL CLIMA:\n"
-            "- Llama a la herramienta obtener_clima para obtener los datos actuales.\n"
-            "- Transforma los datos técnicos en un lenguaje amable y práctico.\n"
-            "- Destaca lo más importante: temperatura actual, condiciones generales, y recomendaciones útiles.\n"
-            "- Incluye consejos prácticos: qué ropa usar, si llevar paraguas, si es buen día para pasear, etc.\n"
-            "- Sé conciso: no abrumes con todos los datos técnicos (presión, nubosidad, etc.).\n"
-            "- Ejemplo: En lugar de listar todos los números, di algo como: 'Hace 18 grados y está parcialmente nublado. Sería un buen día para dar un paseo, pero lleva un abrigo ligero.'\n\n"
-            "CUANDO EL USUARIO PREGUNTA SOBRE NOTICIAS:\n"
-            "- Si pide noticias de El País, El Mundo, o de periódicos específicos, usa la herramienta obtener_noticias_periodicos.\n"
-            "- Si pide noticias generales de España, puedes usar obtener_noticias o obtener_noticias_periodicos.\n"
-            "- Las noticias de obtener_noticias_periodicos son directamente de las fuentes originales y están actualizadas.\n"
-            "- Siempre menciona que las noticias son del día de hoy para dar contexto temporal.\n\n"
-            "CUANDO EL USUARIO PIDE ENVIAR UNA ALERTA O MENSAJE POR WHATSAPP:\n"
-            "- Usa la herramienta enviar_alerta_whatsapp para enviar el mensaje.\n"
-            "- Confirma al usuario que el mensaje ha sido enviado correctamente.\n"
-            "- Si hay un error, informa al usuario de forma amable y sugiere intentarlo de nuevo.\n\n"
-            "HERRAMIENTAS DISPONIBLES:\n"
-            "- obtener_noticias: Noticias generales de España desde NewsAPI\n"
-            "- obtener_noticias_periodicos: Noticias directas de El País y El Mundo (RSS feeds actualizados)\n"
-            "- obtener_clima: Clima actual de cualquier ciudad de España\n"
-            "- enviar_alerta_whatsapp: Envía una alerta o mensaje por WhatsApp al cuidador o familiar\n"
-            "- Usa estas herramientas de manera proactiva cuando sea apropiado para ayudar al usuario.\n"
+
+    profile_section = ""
+    if user_profile:
+        profile_section = (
+            f"\nPERFIL DEL USUARIO:\n"
+            f"- Nombre: {user_profile.get('name', 'Desconocido')}\n"
+            f"- Teléfono: {user_profile.get('number', '')}\n"
+            f"- Descripción: {user_profile.get('description', '')}\n"
+            f"- Intereses: {user_profile.get('interests', '')}\n"
+            f"- Ciudad: {user_profile.get('city', '')}\n\n"
+            "INSTRUCCIONES SOBRE EL PERFIL:\n"
+            f"- Dirígete al usuario por su nombre ({user_profile.get('name', '')}) de forma natural y cálida.\n"
+            f"- Cuando pregunte por el clima sin especificar ciudad, usa su ciudad ({user_profile.get('city', '')}).\n"
+            "- Ten en cuenta sus intereses y descripción para personalizar tus respuestas y sugerencias.\n"
+            "- Usa su número de teléfono solo si necesitas enviarlo en una alerta de WhatsApp.\n\n"
         )
-    }
-    
-    # Prepend system message to the conversation history
+
+    content = (
+        f"FECHA ACTUAL: {today_str}\n\n"
+        "Eres MenteViva, un asistente de IA paciente, respetuoso y cálido, diseñado específicamente para ayudar a personas mayores. "
+        "Tu objetivo es brindar compañía, ayudar con las tareas diarias y fomentar la salud cognitiva.\n\n"
+        f"{profile_section}"
+        "Al interactuar:\n"
+        "1. Usa un lenguaje claro y sencillo, evita tecnicismos.\n"
+        "2. Sé extremadamente paciente y alentador.\n"
+        "3. Si el usuario parece confundido, ofrece orientación amable.\n"
+        "4. Habla con un tono cálido y respetuoso. Usa un trato formal y educado.\n"
+        "5. Ofrece recordatorios de hábitos saludables como beber agua, dar un paseo corto o hacer un rompecabezas.\n"
+        "6. Si te preguntan sobre consejos médicos, recuerda siempre consultar con su médico o un profesional.\n"
+        "7. Mantén las respuestas concisas pero amigables para no abrumar al usuario.\n\n"
+        "CUANDO EL USUARIO PREGUNTA SOBRE EL CLIMA:\n"
+        "- Llama a la herramienta obtener_clima para obtener los datos actuales.\n"
+        "- Transforma los datos técnicos en un lenguaje amable y práctico.\n"
+        "- Destaca lo más importante: temperatura actual, condiciones generales, y recomendaciones útiles.\n"
+        "- Incluye consejos prácticos: qué ropa usar, si llevar paraguas, si es buen día para pasear, etc.\n"
+        "- Sé conciso: no abrumes con todos los datos técnicos (presión, nubosidad, etc.).\n"
+        "- Ejemplo: En lugar de listar todos los números, di algo como: 'Hace 18 grados y está parcialmente nublado. Sería un buen día para dar un paseo, pero lleva un abrigo ligero.'\n\n"
+        "CUANDO EL USUARIO PREGUNTA SOBRE NOTICIAS:\n"
+        "- Si pide noticias de El País, El Mundo, o de periódicos específicos, usa la herramienta obtener_noticias_periodicos.\n"
+        "- Si pide noticias generales de España, puedes usar obtener_noticias o obtener_noticias_periodicos.\n"
+        "- Las noticias de obtener_noticias_periodicos son directamente de las fuentes originales y están actualizadas.\n"
+        "- Siempre menciona que las noticias son del día de hoy para dar contexto temporal.\n\n"
+        "CUANDO EL USUARIO PIDE ENVIAR UNA ALERTA O MENSAJE POR WHATSAPP:\n"
+        "- Usa la herramienta enviar_alerta_whatsapp para enviar el mensaje.\n"
+        "- Confirma al usuario que el mensaje ha sido enviado correctamente.\n"
+        "- Si hay un error, informa al usuario de forma amable y sugiere intentarlo de nuevo.\n\n"
+        "HERRAMIENTAS DISPONIBLES:\n"
+        "- obtener_noticias: Noticias generales de España desde NewsAPI\n"
+        "- obtener_noticias_periodicos: Noticias directas de El País y El Mundo (RSS feeds actualizados)\n"
+        "- obtener_clima: Clima actual de cualquier ciudad de España\n"
+        "- enviar_alerta_whatsapp: Envía una alerta o mensaje por WhatsApp al cuidador o familiar\n"
+        "- Usa estas herramientas de manera proactiva cuando sea apropiado para ayudar al usuario.\n"
+    )
+
+    return {"role": "system", "content": content}
+
+def chatbot_node(state: State):
+    llm = ChatOpenAI(model="gpt-5-nano")
+    llm_with_tools = llm.bind_tools(tools)
+
+    system_message = build_system_message(state.get("user_profile"))
     messages = [system_message] + state["messages"]
-    
+
     return {"messages": [llm_with_tools.invoke(messages)]}
 
 def should_continue(state: State):
@@ -201,8 +214,18 @@ workflow.add_edge("tools", "chatbot")
 # Compile the graph
 graph = workflow.compile()
 
-def chatbot(message: str):
-    # Helper function to interface with main.py
-    input_state = {"messages": [("user", message)]}
+def chatbot(message: str, history: list = None, user_profile: dict = None):
+    # Build conversation messages from history
+    messages = []
+    if history:
+        for msg in history:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role in ("user", "assistant"):
+                messages.append((role, content))
+    # Append the current message
+    messages.append(("user", message))
+
+    input_state = {"messages": messages, "user_profile": user_profile}
     result = graph.invoke(input_state)
     return result["messages"][-1].content

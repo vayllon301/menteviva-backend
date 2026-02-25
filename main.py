@@ -32,8 +32,17 @@ class AlertRequest(BaseModel):
     message: str
     to: Optional[str] = None
 
+class UserProfile(BaseModel):
+    name: str
+    number: str
+    description: str
+    interests: str
+    city: str
+
 class ChatRequest(BaseModel):
     message: str
+    history: List[dict] = []
+    user_profile: Optional[UserProfile] = None
 
 @app.get("/")
 async def root():
@@ -45,7 +54,8 @@ async def health():
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    response = chatbot(request.message)
+    profile = request.user_profile.model_dump() if request.user_profile else None
+    response = chatbot(request.message, history=request.history, user_profile=profile)
     return {"response": response}
 
 
