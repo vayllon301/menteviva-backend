@@ -15,6 +15,16 @@ from alert import send_whatsapp_alert
 
 load_dotenv()
 
+DAYS_ES = {
+    0: "Lunes", 1: "Martes", 2: "Miércoles",
+    3: "Jueves", 4: "Viernes", 5: "Sábado", 6: "Domingo"
+}
+MONTHS_ES = {
+    1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+    5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+    9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+}
+
 # Define tools for the chatbot to use
 @tool
 def obtener_noticias(limite: int = 5) -> str:
@@ -95,20 +105,12 @@ tools = [obtener_noticias, obtener_clima, obtener_noticias_periodicos, enviar_al
 class State(TypedDict):
     messages: Annotated[list, add_messages]
     user_profile: dict
+    tutor_profile: dict
 
-def build_system_message(user_profile: dict = None):
-    """Build the system message, optionally personalized with user profile."""
+def build_system_message(user_profile: dict = None, tutor_profile: dict = None):
+    """Build the system message, optionally personalized with user and tutor profiles."""
     today = datetime.now()
-    days_es = {
-        0: "Lunes", 1: "Martes", 2: "Miércoles",
-        3: "Jueves", 4: "Viernes", 5: "Sábado", 6: "Domingo"
-    }
-    months_es = {
-        1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
-        5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
-        9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
-    }
-    today_str = f"{days_es[today.weekday()]}, {today.day} de {months_es[today.month]} de {today.year}"
+    today_str = f"{DAYS_ES[today.weekday()]}, {today.day} de {MONTHS_ES[today.month]} de {today.year}"
 
     profile_section = ""
     if user_profile:
@@ -126,11 +128,34 @@ def build_system_message(user_profile: dict = None):
             "- Usa su número de teléfono solo si necesitas enviarlo en una alerta de WhatsApp.\n\n"
         )
 
+    tutor_section = ""
+    if tutor_profile:
+        tutor_name = tutor_profile.get('name', 'Desconocido')
+        tutor_number = tutor_profile.get('number', '')
+        tutor_desc = tutor_profile.get('description', '')
+        tutor_ig = tutor_profile.get('instagram', '')
+        tutor_fb = tutor_profile.get('facebook', '')
+
+        tutor_section = (
+            f"PERFIL DEL TUTOR/CUIDADOR:\n"
+            f"- Nombre: {tutor_name}\n"
+            f"- Teléfono: {tutor_number}\n"
+            f"- Descripción: {tutor_desc}\n"
+            f"- Instagram: {tutor_ig}\n"
+            f"- Facebook: {tutor_fb}\n\n"
+            "INSTRUCCIONES SOBRE EL TUTOR:\n"
+            f"- El tutor/cuidador del usuario se llama {tutor_name}.\n"
+            "- Si el usuario pregunta por su cuidador o familiar responsable, puedes referirte a esta persona.\n"
+            f"- Al enviar alertas de WhatsApp, el destinatario es el tutor ({tutor_name}).\n"
+            "- No compartas los datos del tutor (teléfono, redes sociales) directamente con el usuario a menos que lo solicite.\n\n"
+        )
+
     content = (
         f"FECHA ACTUAL: {today_str}\n\n"
         "Eres MenteViva, un asistente de IA paciente, respetuoso y cálido, diseñado específicamente para ayudar a personas mayores. "
         "Tu objetivo es brindar compañía, ayudar con las tareas diarias y fomentar la salud cognitiva.\n\n"
         f"{profile_section}"
+        f"{tutor_section}"
         "Al interactuar:\n"
         "1. Usa un lenguaje claro y sencillo, evita tecnicismos.\n"
         "2. Sé extremadamente paciente y alentador.\n"
@@ -165,11 +190,12 @@ def build_system_message(user_profile: dict = None):
 
     return {"role": "system", "content": content}
 
-def chatbot_node(state: State):
-    llm = ChatOpenAI(model="gpt-5-nano")
-    llm_with_tools = llm.bind_tools(tools)
+llm = ChatOpenAI(model="gpt-5-nano")
+llm_with_tools = llm.bind_tools(tools)
 
-    system_message = build_system_message(state.get("user_profile"))
+def chatbot_node(state: State):
+
+    system_message = build_system_message(state.get("user_profile"), state.get("tutor_profile"))
     messages = [system_message] + state["messages"]
 
     return {"messages": [llm_with_tools.invoke(messages)]}
@@ -214,8 +240,7 @@ workflow.add_edge("tools", "chatbot")
 # Compile the graph
 graph = workflow.compile()
 
-def chatbot(message: str, history: list = None, user_profile: dict = None):
-    # Build conversation messages from history
+def chatbot(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None):
     messages = []
     if history:
         for msg in history:
@@ -223,9 +248,8 @@ def chatbot(message: str, history: list = None, user_profile: dict = None):
             content = msg.get("content", "")
             if role in ("user", "assistant"):
                 messages.append((role, content))
-    # Append the current message
     messages.append(("user", message))
 
-    input_state = {"messages": messages, "user_profile": user_profile}
+    input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile}
     result = graph.invoke(input_state)
     return result["messages"][-1].content

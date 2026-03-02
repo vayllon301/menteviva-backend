@@ -39,10 +39,19 @@ class UserProfile(BaseModel):
     interests: str
     city: str
 
+class TutorProfile(BaseModel):
+    id: str
+    name: str
+    number: Optional[str] = None
+    description: Optional[str] = None
+    instagram: Optional[str] = None
+    facebook: Optional[str] = None
+
 class ChatRequest(BaseModel):
     message: str
     history: List[dict] = []
     user_profile: Optional[UserProfile] = None
+    tutor_profile: Optional[TutorProfile] = None
 
 @app.get("/")
 async def root():
@@ -55,7 +64,8 @@ async def health():
 @app.post("/chat")
 async def chat(request: ChatRequest):
     profile = request.user_profile.model_dump() if request.user_profile else None
-    response = chatbot(request.message, history=request.history, user_profile=profile)
+    tutor = request.tutor_profile.model_dump(exclude={"id"}) if request.tutor_profile else None
+    response = chatbot(request.message, history=request.history, user_profile=profile, tutor_profile=tutor)
     return {"response": response}
 
 
