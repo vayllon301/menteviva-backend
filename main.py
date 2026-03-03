@@ -45,6 +45,8 @@ class TutorProfile(BaseModel):
     description: Optional[str] = None
     instagram: Optional[str] = None
     facebook: Optional[str] = None
+    relationship: Optional[str] = None
+    factors: Optional[str] = None
 
 class ChatRequest(BaseModel):
     message: str

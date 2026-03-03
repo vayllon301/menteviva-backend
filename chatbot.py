@@ -135,20 +135,36 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None):
         tutor_desc = tutor_profile.get('description', '')
         tutor_ig = tutor_profile.get('instagram', '')
         tutor_fb = tutor_profile.get('facebook', '')
+        tutor_relationship = tutor_profile.get('relationship', '')
+        tutor_factors = tutor_profile.get('factors', '')
 
         tutor_section = (
             f"PERFIL DEL TUTOR/CUIDADOR:\n"
             f"- Nombre: {tutor_name}\n"
+            f"- Relación con el usuario: {tutor_relationship}\n"
             f"- Teléfono: {tutor_number}\n"
             f"- Descripción: {tutor_desc}\n"
             f"- Instagram: {tutor_ig}\n"
             f"- Facebook: {tutor_fb}\n\n"
             "INSTRUCCIONES SOBRE EL TUTOR:\n"
-            f"- El tutor/cuidador del usuario se llama {tutor_name}.\n"
+            f"- El tutor/cuidador del usuario se llama {tutor_name}"
+            + (f" y es su {tutor_relationship}" if tutor_relationship else "") + ".\n"
             "- Si el usuario pregunta por su cuidador o familiar responsable, puedes referirte a esta persona.\n"
             f"- Al enviar alertas de WhatsApp, el destinatario es el tutor ({tutor_name}).\n"
             "- No compartas los datos del tutor (teléfono, redes sociales) directamente con el usuario a menos que lo solicite.\n\n"
         )
+
+        if tutor_factors:
+            tutor_section += (
+                "⚠️ FACTORES IMPORTANTES SOBRE EL USUARIO ⚠️\n"
+                f"El cuidador ha indicado los siguientes factores a tener muy en cuenta:\n"
+                f"{tutor_factors}\n\n"
+                "INSTRUCCIONES OBLIGATORIAS SOBRE ESTOS FACTORES:\n"
+                "- Adapta SIEMPRE tus respuestas y sugerencias teniendo en cuenta estos factores.\n"
+                "- Nunca recomiendes actividades, alimentos o hábitos que puedan ser perjudiciales dado su estado.\n"
+                "- Si el usuario menciona síntomas o situaciones relacionadas con estos factores, trátalo con especial cuidado y sugiere contactar a su médico o cuidador.\n"
+                "- Si detectas una situación de riesgo relacionada con estos factores, ofrece proactivamente enviar una alerta al cuidador.\n\n"
+            )
 
     content = (
         f"FECHA ACTUAL: {today_str}\n\n"
