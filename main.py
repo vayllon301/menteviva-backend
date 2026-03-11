@@ -2,7 +2,7 @@ from typing import Optional, List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from chatbot import chatbot
+from chatbot import chatbot, chatbot_async
 from cv import cv as cv_assistant
 from blanca import blanca as blanca_assistant
 from quote import quote as quote_assistant, QuoteResponse
@@ -15,10 +15,11 @@ from spanish_newspapers import (
     get_elpais_news,
     get_elmundo_news
 )
-from voice import process_voice_message
+from voice import process_voice_message, transcribe_audio, text_to_speech
 from alert import send_whatsapp_alert
 from io import BytesIO
 import base64
+import json
 
 app = FastAPI()
 
@@ -65,8 +66,12 @@ async def health():
 @app.post("/chat")
 async def chat(request: ChatRequest):
     profile = request.user_profile.model_dump() if request.user_profile else None
+<<<<<<< HEAD
     tutor = request.tutor_profile.model_dump() if request.tutor_profile else None
     response = chatbot(request.message, history=request.history, user_profile=profile, tutor_profile=tutor)
+=======
+    response = await chatbot_async(request.message, history=request.history, user_profile=profile)
+>>>>>>> e24bc5b (Improved chatbot speed.)
     return {"response": response}
 
 
@@ -241,61 +246,119 @@ async def alert(request: AlertRequest):
         raise HTTPException(status_code=400, detail=result["error"])
     return result
 
+@app.post("/voice/transcribe")
+async def voice_transcribe(
+    audio: UploadFile = File(...),
+):
+    """
+    Transcribe audio a texto (solo STT). Endpoint rápido (~1-2s).
+    """
+    try:
+        if not audio.content_type or (
+            not audio.content_type.startswith('audio') and
+            not audio.content_type.startswith('video')
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="El archivo debe ser de tipo audio o video/webm"
+            )
+
+        audio_bytes = await audio.read()
+        if len(audio_bytes) == 0:
+            raise HTTPException(status_code=400, detail="El archivo de audio está vacío")
+
+        transcribed_text = await transcribe_audio(audio_bytes)
+        return {"text": transcribed_text}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error transcribiendo audio: {str(e)}")
+
+
+class TTSRequest(BaseModel):
+    text: str
+    voice: str = "nova"
+
+@app.post("/voice/tts")
+async def voice_tts(request: TTSRequest):
+    """
+    Convierte texto a audio (solo TTS). Endpoint rápido (~1-2s).
+    """
+    try:
+        if not request.text.strip():
+            raise HTTPException(status_code=400, detail="El texto no puede estar vacío")
+
+        audio_bytes = await text_to_speech(request.text, voice=request.voice)
+        audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+
+        return {
+            "audio": audio_base64,
+            "audioType": "audio/ogg"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generando audio: {str(e)}")
+
+
 @app.post("/voice")
 async def voice(
     audio: UploadFile = File(...),
-    voice: str = "nova"
+    voice_name: str = "nova",
+    history: str = None,
+    user_profile_json: str = None,
 ):
     """
-    Procesa entrada de voz a través del chatbot y retorna respuesta en audio.
-    
-    Pipeline completo:
-    1. Recibe archivo de audio del frontend
-    2. Transcribe audio a texto (Speech-to-Text con Whisper)
-    3. Procesa el texto a través del chatbot MenteViva
-    4. Convierte la respuesta a audio (Text-to-Speech)
-    5. Retorna el audio generado
-    
-    Args:
-        audio: Archivo de audio (webm, mp3, wav, etc.)
-        voice: Voz a usar para TTS - opciones: alloy, echo, fable, onyx, nova (default), shimmer
-               'nova' es una voz cálida y amigable, ideal para usuarios mayores
-    
-    Returns:
-        Audio MP3 con la respuesta del chatbot
+    Pipeline completo de voz (STT → Chatbot → TTS).
+    Acepta historial y perfil de usuario para respuestas contextuales.
     """
     try:
-        # Validar el tipo de archivo
-        if not audio.content_type or not audio.content_type.startswith('audio'):
-            # Permitir también video/webm que es común para grabaciones de navegador
-            if not audio.content_type.startswith('video'):
-                raise HTTPException(
-                    status_code=400, 
-                    detail="El archivo debe ser de tipo audio o video/webm"
-                )
-        
-        # Leer el archivo de audio
+        if not audio.content_type or (
+            not audio.content_type.startswith('audio') and
+            not audio.content_type.startswith('video')
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="El archivo debe ser de tipo audio o video/webm"
+            )
+
         audio_bytes = await audio.read()
-        
-        # Validar que el archivo no esté vacío
         if len(audio_bytes) == 0:
             raise HTTPException(status_code=400, detail="El archivo de audio está vacío")
-        
-        # Procesar a través del pipeline completo
-        response_audio, transcribed_text, chatbot_response = process_voice_message(
-            audio_bytes, 
-            voice=voice
+
+        # Parse optional history and profile from form data
+        parsed_history = None
+        parsed_profile = None
+        if history:
+            try:
+                parsed_history = json.loads(history)
+            except json.JSONDecodeError:
+                pass
+        if user_profile_json:
+            try:
+                parsed_profile = json.loads(user_profile_json)
+            except json.JSONDecodeError:
+                pass
+
+        response_audio, transcribed_text, chatbot_response = await process_voice_message(
+            audio_bytes,
+            voice=voice_name,
+            history=parsed_history,
+            user_profile=parsed_profile
         )
-        
-        # Encode audio as base64 and return JSON with full response
+
         audio_base64 = base64.b64encode(response_audio).decode("utf-8")
 
         return {
             "text": transcribed_text,
             "response": chatbot_response,
             "audio": audio_base64,
-            "audioType": "audio/mpeg"
+            "audioType": "audio/ogg"
         }
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error procesando audio: {str(e)}")

@@ -1,10 +1,11 @@
 from openai import OpenAI
 from pydantic import BaseModel
 from dotenv import load_dotenv
+import os
 
 load_dotenv()
 
-client = OpenAI()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class Quote(BaseModel):
     quote: str

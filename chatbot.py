@@ -206,12 +206,21 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None):
 
     return {"role": "system", "content": content}
 
+<<<<<<< HEAD
 llm = ChatOpenAI(model="gpt-5-nano")
 llm_with_tools = llm.bind_tools(tools)
 
 def chatbot_node(state: State):
 
     system_message = build_system_message(state.get("user_profile"), state.get("tutor_profile"))
+=======
+# Module-level LLM instance (avoid recreating on every request)
+llm = ChatOpenAI(model="gpt-5-nano", api_key=os.getenv("OPENAI_API_KEY"))
+llm_with_tools = llm.bind_tools(tools)
+
+def chatbot_node(state: State):
+    system_message = build_system_message(state.get("user_profile"))
+>>>>>>> e24bc5b (Improved chatbot speed.)
     messages = [system_message] + state["messages"]
 
     return {"messages": [llm_with_tools.invoke(messages)]}
@@ -256,7 +265,12 @@ workflow.add_edge("tools", "chatbot")
 # Compile the graph
 graph = workflow.compile()
 
+<<<<<<< HEAD
 def chatbot(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None):
+=======
+def _build_messages(message: str, history: list = None):
+    """Build conversation messages from history and current message."""
+>>>>>>> e24bc5b (Improved chatbot speed.)
     messages = []
     if history:
         for msg in history:
@@ -265,7 +279,23 @@ def chatbot(message: str, history: list = None, user_profile: dict = None, tutor
             if role in ("user", "assistant"):
                 messages.append((role, content))
     messages.append(("user", message))
+    return messages
 
+<<<<<<< HEAD
     input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile}
+=======
+
+def chatbot(message: str, history: list = None, user_profile: dict = None):
+    messages = _build_messages(message, history)
+    input_state = {"messages": messages, "user_profile": user_profile}
+>>>>>>> e24bc5b (Improved chatbot speed.)
     result = graph.invoke(input_state)
+    return result["messages"][-1].content
+
+
+async def chatbot_async(message: str, history: list = None, user_profile: dict = None):
+    """Async version of chatbot using ainvoke (non-blocking)."""
+    messages = _build_messages(message, history)
+    input_state = {"messages": messages, "user_profile": user_profile}
+    result = await graph.ainvoke(input_state)
     return result["messages"][-1].content
