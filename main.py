@@ -66,12 +66,8 @@ async def health():
 @app.post("/chat")
 async def chat(request: ChatRequest):
     profile = request.user_profile.model_dump() if request.user_profile else None
-<<<<<<< HEAD
     tutor = request.tutor_profile.model_dump() if request.tutor_profile else None
-    response = chatbot(request.message, history=request.history, user_profile=profile, tutor_profile=tutor)
-=======
-    response = await chatbot_async(request.message, history=request.history, user_profile=profile)
->>>>>>> e24bc5b (Improved chatbot speed.)
+    response = await chatbot_async(request.message, history=request.history, user_profile=profile, tutor_profile=tutor)
     return {"response": response}
 
 

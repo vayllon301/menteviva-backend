@@ -29,12 +29,12 @@ MONTHS_ES = {
 @tool
 def obtener_noticias(limite: int = 5) -> str:
     """
-    Obtiene las noticias más recientes de España. Usa esta herramienta cuando el usuario 
+    Obtiene las noticias más recientes de España. Usa esta herramienta cuando el usuario
     pregunte sobre noticias, actualidad, lo que está pasando hoy, o información reciente.
-    
+
     Args:
         limite: Número de noticias a obtener (por defecto 5, máximo recomendado 10)
-    
+
     Returns:
         Noticias formateadas listas para presentar al usuario
     """
@@ -45,13 +45,13 @@ def obtener_noticias(limite: int = 5) -> str:
 @tool
 def obtener_clima(ciudad: str = "Barcelona") -> str:
     """
-    Obtiene el clima actual de una ciudad en España. Usa esta herramienta cuando el usuario 
+    Obtiene el clima actual de una ciudad en España. Usa esta herramienta cuando el usuario
     pregunte sobre el tiempo, el clima, la temperatura o las condiciones meteorológicas.
-    
+
     Args:
         ciudad: Nombre de la ciudad (por defecto "Barcelona"). El usuario puede especificar
                 cualquier ciudad de España como Barcelona, Valencia, Sevilla, etc.
-    
+
     Returns:
         Información del clima formateada lista para presentar al usuario
     """
@@ -65,11 +65,11 @@ def obtener_noticias_periodicos(limite_por_fuente: int = 5, periodico: str = "am
     Esta herramienta accede a las fuentes originales de estos periódicos.
     Usa esta herramienta cuando el usuario específicamente pida noticias de estos periódicos
     o cuando quiera noticias actualizadas de fuentes confiables españolas.
-    
+
     Args:
         limite_por_fuente: Número de noticias a obtener de cada periódico (por defecto 5)
         periodico: Qué periódico consultar: "ambos" (defecto), "elpais", o "elmundo"
-    
+
     Returns:
         Noticias actualizadas formateadas con la fecha de hoy, listas para presentar al usuario
     """
@@ -77,7 +77,7 @@ def obtener_noticias_periodicos(limite_por_fuente: int = 5, periodico: str = "am
         news_data = get_combined_news(limit_per_source=limite_por_fuente)
     else:
         news_data = get_newspapers_by_source(source=periodico, limit=limite_por_fuente * 2)
-    
+
     return format_newspapers_for_chat(news_data)
 
 @tool
@@ -206,21 +206,12 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None):
 
     return {"role": "system", "content": content}
 
-<<<<<<< HEAD
-llm = ChatOpenAI(model="gpt-5-nano")
-llm_with_tools = llm.bind_tools(tools)
-
-def chatbot_node(state: State):
-
-    system_message = build_system_message(state.get("user_profile"), state.get("tutor_profile"))
-=======
 # Module-level LLM instance (avoid recreating on every request)
 llm = ChatOpenAI(model="gpt-5-nano", api_key=os.getenv("OPENAI_API_KEY"))
 llm_with_tools = llm.bind_tools(tools)
 
 def chatbot_node(state: State):
-    system_message = build_system_message(state.get("user_profile"))
->>>>>>> e24bc5b (Improved chatbot speed.)
+    system_message = build_system_message(state.get("user_profile"), state.get("tutor_profile"))
     messages = [system_message] + state["messages"]
 
     return {"messages": [llm_with_tools.invoke(messages)]}
@@ -229,7 +220,7 @@ def should_continue(state: State):
     """Decide if we should continue to tools or end"""
     messages = state["messages"]
     last_message = messages[-1]
-    
+
     # If there are no tool calls, we finish
     if not last_message.tool_calls:
         return "end"
@@ -265,12 +256,8 @@ workflow.add_edge("tools", "chatbot")
 # Compile the graph
 graph = workflow.compile()
 
-<<<<<<< HEAD
-def chatbot(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None):
-=======
 def _build_messages(message: str, history: list = None):
     """Build conversation messages from history and current message."""
->>>>>>> e24bc5b (Improved chatbot speed.)
     messages = []
     if history:
         for msg in history:
@@ -281,21 +268,17 @@ def _build_messages(message: str, history: list = None):
     messages.append(("user", message))
     return messages
 
-<<<<<<< HEAD
-    input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile}
-=======
 
-def chatbot(message: str, history: list = None, user_profile: dict = None):
+def chatbot(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None):
     messages = _build_messages(message, history)
-    input_state = {"messages": messages, "user_profile": user_profile}
->>>>>>> e24bc5b (Improved chatbot speed.)
+    input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile}
     result = graph.invoke(input_state)
     return result["messages"][-1].content
 
 
-async def chatbot_async(message: str, history: list = None, user_profile: dict = None):
+async def chatbot_async(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None):
     """Async version of chatbot using ainvoke (non-blocking)."""
     messages = _build_messages(message, history)
-    input_state = {"messages": messages, "user_profile": user_profile}
+    input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile}
     result = await graph.ainvoke(input_state)
     return result["messages"][-1].content
