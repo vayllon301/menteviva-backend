@@ -2,7 +2,7 @@ from typing import Optional, List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from chatbot import chatbot, chatbot_async
+from chatbot import chatbot, chatbot_async, chatbot_stream
 from cv import cv as cv_assistant
 from blanca import blanca as blanca_assistant
 from quote import quote as quote_assistant, QuoteResponse
@@ -30,7 +30,6 @@ class QuoteRequest(BaseModel):
     language: str
 
 class AlertRequest(BaseModel):
-    message: str
     to: Optional[str] = None
 
 class UserProfile(BaseModel):
@@ -69,6 +68,36 @@ async def chat(request: ChatRequest):
     tutor = request.tutor_profile.model_dump() if request.tutor_profile else None
     response = await chatbot_async(request.message, history=request.history, user_profile=profile, tutor_profile=tutor)
     return {"response": response}
+
+
+@app.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+    profile = request.user_profile.model_dump() if request.user_profile else None
+    tutor = request.tutor_profile.model_dump() if request.tutor_profile else None
+
+    async def event_generator():
+        try:
+            async for token in chatbot_stream(
+                request.message,
+                history=request.history,
+                user_profile=profile,
+                tutor_profile=tutor,
+            ):
+                # SSE format: each event is "data: <content>\n\n"
+                yield f"data: {json.dumps({'token': token})}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/cv")
@@ -237,7 +266,7 @@ async def alert(request: AlertRequest):
     Returns:
         JSON con el resultado del envío
     """
-    result = send_whatsapp_alert(message=request.message, to=request.to)
+    result = send_whatsapp_alert(to=request.to)
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])
     return result

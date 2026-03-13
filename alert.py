@@ -10,6 +10,7 @@ TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "")
 TWILIO_WHATSAPP_TO = os.getenv("TWILIO_WHATSAPP_TO", "")
+TWILIO_TEMPLATE_SID = "HX9ac120b6997f51111427fe2c5db3a4b7"
 
 
 def _ensure_whatsapp_prefix(number: str) -> str:
@@ -18,7 +19,7 @@ def _ensure_whatsapp_prefix(number: str) -> str:
     return number
 
 
-def send_whatsapp_alert(message: str, to: Optional[str] = None) -> dict:
+def send_whatsapp_alert(to: Optional[str] = None) -> dict:
     if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
         return {
             "error": "No se han configurado TWILIO_ACCOUNT_SID y/o TWILIO_AUTH_TOKEN",
@@ -46,8 +47,8 @@ def send_whatsapp_alert(message: str, to: Optional[str] = None) -> dict:
 
         twilio_message = client.messages.create(
             from_=sender,
-            body=message,
-            to=recipient
+            to=recipient,
+            content_sid=TWILIO_TEMPLATE_SID,
         )
 
         return {
@@ -55,8 +56,7 @@ def send_whatsapp_alert(message: str, to: Optional[str] = None) -> dict:
             "alert": {
                 "sid": twilio_message.sid,
                 "estado": twilio_message.status,
-                "destino": recipient,
-                "mensaje": message
+                "destino": recipient
             }
         }
 

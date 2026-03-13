@@ -81,19 +81,16 @@ def obtener_noticias_periodicos(limite_por_fuente: int = 5, periodico: str = "am
     return format_newspapers_for_chat(news_data)
 
 @tool
-def enviar_alerta_whatsapp(mensaje: str) -> str:
+def enviar_alerta_whatsapp() -> str:
     """
-    Envía una alerta o mensaje importante por WhatsApp al cuidador o familiar del usuario.
-    Usa esta herramienta cuando el usuario pida enviar un mensaje, alerta o aviso por WhatsApp,
+    Envía una alerta predefinida por WhatsApp al cuidador o familiar del usuario.
+    Usa esta herramienta cuando el usuario pida enviar una alerta o aviso por WhatsApp,
     o cuando detectes una situación que requiera notificar a alguien (emergencia, recordatorio importante, etc.).
-
-    Args:
-        mensaje: El texto del mensaje a enviar por WhatsApp
 
     Returns:
         Confirmación del envío o mensaje de error
     """
-    result = send_whatsapp_alert(message=mensaje)
+    result = send_whatsapp_alert()
     if result.get("error"):
         return f"No se pudo enviar la alerta: {result['error']}"
     alert_info = result["alert"]
@@ -282,3 +279,19 @@ async def chatbot_async(message: str, history: list = None, user_profile: dict =
     input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile}
     result = await graph.ainvoke(input_state)
     return result["messages"][-1].content
+
+
+async def chatbot_stream(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None):
+    """Async generator that yields tokens as they are produced by the LLM."""
+    messages = _build_messages(message, history)
+    input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile}
+
+    async for event in graph.astream_events(input_state, version="v2"):
+        kind = event.get("event")
+        # Stream tokens from the chatbot node's LLM calls
+        if kind == "on_chat_model_stream":
+            chunk = event.get("data", {}).get("chunk")
+            if chunk and hasattr(chunk, "content") and chunk.content:
+                # Only yield text content, skip tool call chunks
+                if isinstance(chunk.content, str):
+                    yield chunk.content
