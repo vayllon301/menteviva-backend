@@ -2,7 +2,20 @@
   "permissions": {
     "allow": [
       "Bash(git pull:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(grep -r \"class.*Profile\" /c/Users/vayll/Desktop/IA_MAYORES/menteviva-backend/*.py)",
+      "Bash(grep -r \"def.*auth\\\\|class.*Auth\" /c/Users/vayll/Desktop/IA_MAYORES/menteviva-backend/*.py)",
+      "Bash(grep -r \"social\\\\|instagram\\\\|facebook\\\\|twitter\\\\|linkedin\" /c/Users/vayll/Desktop/IA_MAYORES/menteviva-backend/*.py)",
+      "Bash(python -c \"from instagram import validate_instagram_username, extract_username, fetch_instagram_profile; print\\('Module imports OK'\\)\")",
+      "Bash(pip install:*)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('C:/Users/vayll/Desktop/IA_MAYORES/menteviva-backend/main.py'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")",
+      "Bash(cd /c/Users/vayll/Desktop/IA_MAYORES/ia-mayores && npx tsc --noEmit app/auth/profile/page.tsx app/api/tutor/instagram/route.ts 2>&1 | head -20)",
+      "Bash(cd /c/Users/vayll/Desktop/IA_MAYORES/ia-mayores && npx next lint --file app/auth/profile/page.tsx 2>&1 | tail -5)",
+      "Bash(cd /c/Users/vayll/Desktop/IA_MAYORES/ia-mayores && npx next lint 2>&1 | tail -10)",
+      "Bash(cd /c/Users/vayll/Desktop/IA_MAYORES/ia-mayores && npx next build --no-lint 2>&1 | tail -15)",
+      "Bash(cd /c/Users/vayll/Desktop/IA_MAYORES/ia-mayores && npx tsc --noEmit 2>&1 | tail -10)",
+      "Bash(python -c \"from instagram import get_instagram_info, format_instagram_for_chat; print\\('instagram.py OK'\\)\" && python -c \"import ast; ast.parse\\(open\\('chatbot.py'\\).read\\(\\)\\); print\\('chatbot.py OK'\\)\" && python -c \"import ast; ast.parse\\(open\\('main.py'\\).read\\(\\)\\); print\\('main.py OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('chatbot.py', encoding='utf-8'\\).read\\(\\)\\); print\\('chatbot.py OK'\\)\" && python -c \"import ast; ast.parse\\(open\\('main.py', encoding='utf-8'\\).read\\(\\)\\); print\\('main.py OK'\\)\")"
     ]
   }
 }

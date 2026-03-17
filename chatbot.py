@@ -12,6 +12,7 @@ from news import get_spain_news, format_news_for_chat
 from weather import get_weather, format_weather_for_chat
 from spanish_newspapers import get_combined_news, format_newspapers_for_chat, get_newspapers_by_source
 from alert import send_whatsapp_alert
+from instagram import get_instagram_info, format_instagram_for_chat
 
 load_dotenv()
 
@@ -96,15 +97,33 @@ def enviar_alerta_whatsapp() -> str:
     alert_info = result["alert"]
     return f"Alerta enviada correctamente por WhatsApp al número {alert_info['destino']}."
 
+@tool
+def obtener_instagram(usuario: str) -> str:
+    """
+    Obtiene información pública del perfil de Instagram de una persona.
+    Usa esta herramienta cuando el usuario pregunte sobre la cuenta de Instagram
+    de su cuidador/tutor, o cuando quiera saber información de un perfil de Instagram.
+    El nombre de usuario del tutor aparece en el perfil del tutor si está vinculado.
+
+    Args:
+        usuario: Nombre de usuario de Instagram (sin @). Por ejemplo: "juan.perez"
+
+    Returns:
+        Información del perfil de Instagram: nombre, biografía, seguidores, publicaciones, etc.
+    """
+    info = get_instagram_info(usuario)
+    return format_instagram_for_chat(info)
+
 # Define the list of tools
-tools = [obtener_noticias, obtener_clima, obtener_noticias_periodicos, enviar_alerta_whatsapp]
+tools = [obtener_noticias, obtener_clima, obtener_noticias_periodicos, enviar_alerta_whatsapp, obtener_instagram]
 
 class State(TypedDict):
     messages: Annotated[list, add_messages]
     user_profile: dict
     tutor_profile: dict
+    user_memory: dict
 
-def build_system_message(user_profile: dict = None, tutor_profile: dict = None):
+def build_system_message(user_profile: dict = None, tutor_profile: dict = None, user_memory: dict = None):
     """Build the system message, optionally personalized with user and tutor profiles."""
     today = datetime.now()
     today_str = f"{DAYS_ES[today.weekday()]}, {today.day} de {MONTHS_ES[today.month]} de {today.year}"
@@ -148,7 +167,10 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None):
             + (f" y es su {tutor_relationship}" if tutor_relationship else "") + ".\n"
             "- Si el usuario pregunta por su cuidador o familiar responsable, puedes referirte a esta persona.\n"
             f"- Al enviar alertas de WhatsApp, el destinatario es el tutor ({tutor_name}).\n"
-            "- No compartas los datos del tutor (teléfono, redes sociales) directamente con el usuario a menos que lo solicite.\n\n"
+            "- No compartas los datos del tutor (teléfono, redes sociales) directamente con el usuario a menos que lo solicite.\n"
+            + (f"- El tutor tiene vinculada su cuenta de Instagram: @{tutor_ig}. "
+               "Puedes usar la herramienta obtener_instagram para consultar su perfil si el usuario pregunta.\n" if tutor_ig else "")
+            + "\n"
         )
 
         if tutor_factors:
@@ -193,13 +215,36 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None):
         "- Usa la herramienta enviar_alerta_whatsapp para enviar el mensaje.\n"
         "- Confirma al usuario que el mensaje ha sido enviado correctamente.\n"
         "- Si hay un error, informa al usuario de forma amable y sugiere intentarlo de nuevo.\n\n"
+        "CUANDO EL USUARIO PREGUNTA SOBRE INSTAGRAM:\n"
+        "- Si el usuario pregunta por el Instagram de su cuidador/tutor/familiar, usa la herramienta obtener_instagram con el usuario del tutor.\n"
+        "- Si pregunta por cualquier otro perfil de Instagram, también puedes usar la herramienta.\n"
+        "- Presenta la información de forma clara y amigable: nombre, biografía, número de seguidores y publicaciones.\n"
+        "- Si el perfil es privado o no se puede acceder, explícalo amablemente.\n\n"
         "HERRAMIENTAS DISPONIBLES:\n"
         "- obtener_noticias: Noticias generales de España desde NewsAPI\n"
         "- obtener_noticias_periodicos: Noticias directas de El País y El Mundo (RSS feeds actualizados)\n"
         "- obtener_clima: Clima actual de cualquier ciudad de España\n"
         "- enviar_alerta_whatsapp: Envía una alerta o mensaje por WhatsApp al cuidador o familiar\n"
+        "- obtener_instagram: Obtiene información pública de un perfil de Instagram (seguidores, biografía, publicaciones)\n"
         "- Usa estas herramientas de manera proactiva cuando sea apropiado para ayudar al usuario.\n"
     )
+
+    memory_section = ""
+    if user_memory:
+        facts = user_memory.get("facts", [])
+        narrative = user_memory.get("narrative", "")
+        if facts or narrative:
+            facts_text = "\n".join(f"- {f['text']}" for f in facts) if facts else ""
+            memory_section = (
+                "\nMEMORIA DEL USUARIO:\n"
+                "Lo que he aprendido sobre ti a lo largo del tiempo:\n\n"
+                + (f"HECHOS CONOCIDOS:\n{facts_text}\n\n" if facts_text else "")
+                + (f"RESUMEN RECIENTE:\n{narrative}\n\n" if narrative else "")
+                + "INSTRUCCIONES: Usa esta información de forma natural cuando sea relevante. "
+                "No la menciones directamente a menos que el usuario lo haga primero.\n"
+            )
+
+    content = content + memory_section
 
     return {"role": "system", "content": content}
 
@@ -208,7 +253,7 @@ llm = ChatOpenAI(model="gpt-5-nano", api_key=os.getenv("OPENAI_API_KEY"))
 llm_with_tools = llm.bind_tools(tools)
 
 def chatbot_node(state: State):
-    system_message = build_system_message(state.get("user_profile"), state.get("tutor_profile"))
+    system_message = build_system_message(state.get("user_profile"), state.get("tutor_profile"), state.get("user_memory"))
     messages = [system_message] + state["messages"]
 
     return {"messages": [llm_with_tools.invoke(messages)]}
@@ -266,25 +311,25 @@ def _build_messages(message: str, history: list = None):
     return messages
 
 
-def chatbot(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None):
+def chatbot(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None, user_memory: dict = None):
     messages = _build_messages(message, history)
-    input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile}
+    input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile, "user_memory": user_memory}
     result = graph.invoke(input_state)
     return result["messages"][-1].content
 
 
-async def chatbot_async(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None):
+async def chatbot_async(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None, user_memory: dict = None):
     """Async version of chatbot using ainvoke (non-blocking)."""
     messages = _build_messages(message, history)
-    input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile}
+    input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile, "user_memory": user_memory}
     result = await graph.ainvoke(input_state)
     return result["messages"][-1].content
 
 
-async def chatbot_stream(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None):
+async def chatbot_stream(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None, user_memory: dict = None):
     """Async generator that yields tokens as they are produced by the LLM."""
     messages = _build_messages(message, history)
-    input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile}
+    input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile, "user_memory": user_memory}
 
     async for event in graph.astream_events(input_state, version="v2"):
         kind = event.get("event")

@@ -1,5 +1,5 @@
 from typing import Optional, List
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from chatbot import chatbot, chatbot_async, chatbot_stream
@@ -17,6 +17,8 @@ from spanish_newspapers import (
 )
 from voice import process_voice_message, transcribe_audio, text_to_speech
 from alert import send_whatsapp_alert
+from memory_service import run_memory_pipeline
+from instagram import validate_instagram_username, fetch_instagram_profile
 from io import BytesIO
 import base64
 import json
@@ -53,6 +55,14 @@ class ChatRequest(BaseModel):
     history: List[dict] = []
     user_profile: Optional[UserProfile] = None
     tutor_profile: Optional[TutorProfile] = None
+    user_memory: Optional[dict] = None
+
+class InstagramLinkRequest(BaseModel):
+    username: str
+
+class MemorySummarizeRequest(BaseModel):
+    user_id: str
+    messages: List[dict]
 
 @app.get("/")
 async def root():
@@ -66,7 +76,7 @@ async def health():
 async def chat(request: ChatRequest):
     profile = request.user_profile.model_dump() if request.user_profile else None
     tutor = request.tutor_profile.model_dump() if request.tutor_profile else None
-    response = await chatbot_async(request.message, history=request.history, user_profile=profile, tutor_profile=tutor)
+    response = await chatbot_async(request.message, history=request.history, user_profile=profile, tutor_profile=tutor, user_memory=request.user_memory)
     return {"response": response}
 
 
@@ -82,6 +92,7 @@ async def chat_stream(request: ChatRequest):
                 history=request.history,
                 user_profile=profile,
                 tutor_profile=tutor,
+                user_memory=request.user_memory,
             ):
                 # SSE format: each event is "data: <content>\n\n"
                 yield f"data: {json.dumps({'token': token})}\n\n"
@@ -98,6 +109,12 @@ async def chat_stream(request: ChatRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.post("/memory/summarize", status_code=202)
+async def summarize_memory(request: MemorySummarizeRequest, background_tasks: BackgroundTasks):
+    background_tasks.add_task(run_memory_pipeline, request.user_id, request.messages)
+    return {"status": "accepted"}
 
 
 @app.post("/cv")
@@ -270,6 +287,51 @@ async def alert(request: AlertRequest):
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])
     return result
+
+
+@app.post("/tutor/instagram/link")
+async def link_instagram(request: InstagramLinkRequest):
+    """
+    Valida y vincula una cuenta de Instagram al perfil del tutor.
+
+    Acepta un nombre de usuario, @usuario, o URL completa de Instagram.
+    Valida el formato y opcionalmente verifica que el perfil exista.
+
+    Returns:
+        JSON con el username validado, URL del perfil, y estado de verificación
+    """
+    validation = validate_instagram_username(request.username)
+
+    if validation.get("error"):
+        raise HTTPException(status_code=400, detail=validation["error"])
+
+    username = validation["username"]
+
+    # Try to verify the profile exists (best-effort, non-blocking)
+    profile_check = fetch_instagram_profile(username)
+
+    return {
+        "linked": True,
+        "username": username,
+        "profile_url": validation["profile_url"],
+        "verified": profile_check["exists"] if profile_check else None,
+    }
+
+
+@app.post("/tutor/instagram/unlink")
+async def unlink_instagram():
+    """
+    Desvincula la cuenta de Instagram del perfil del tutor.
+
+    Returns:
+        JSON confirmando la desvinculación
+    """
+    return {
+        "linked": False,
+        "username": None,
+        "profile_url": None,
+    }
+
 
 @app.post("/voice/transcribe")
 async def voice_transcribe(
