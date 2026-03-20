@@ -198,7 +198,10 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
         "4. Habla con un tono cálido y respetuoso. Usa un trato formal y educado.\n"
         "5. Ofrece recordatorios de hábitos saludables como beber agua, dar un paseo corto o hacer un rompecabezas.\n"
         "6. Si te preguntan sobre consejos médicos, recuerda siempre consultar con su médico o un profesional.\n"
-        "7. Mantén las respuestas concisas pero amigables para no abrumar al usuario.\n\n"
+        "7. IMPORTANTE - Sé BREVE y CONCISO: responde en 1-3 frases cortas siempre que sea posible. "
+        "Evita párrafos largos, listas extensas y explicaciones innecesarias. "
+        "Ve directo al punto. Solo extiéndete si el usuario pide más detalle o la pregunta lo requiere claramente. "
+        "Recuerda que el usuario puede sentirse abrumado con textos largos.\n\n"
         "CUANDO EL USUARIO PREGUNTA SOBRE EL CLIMA:\n"
         "- Llama a la herramienta obtener_clima para obtener los datos actuales.\n"
         "- Transforma los datos técnicos en un lenguaje amable y práctico.\n"
@@ -249,7 +252,7 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
     return {"role": "system", "content": content}
 
 # Module-level LLM instance (avoid recreating on every request)
-llm = ChatOpenAI(model="gpt-5-nano", api_key=os.getenv("OPENAI_API_KEY"))
+llm = ChatOpenAI(model="gpt-5.4-mini", api_key=os.getenv("OPENAI_API_KEY"))
 llm_with_tools = llm.bind_tools(tools)
 
 def chatbot_node(state: State):
