@@ -5,70 +5,40 @@ usando sus RSS feeds.
 import feedparser
 from datetime import datetime
 from typing import List, Dict
-import requests
 from bs4 import BeautifulSoup
 
 # URLs de los RSS feeds
 ELPAIS_RSS = "https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada"
 ELMUNDO_RSS = "https://e00-elmundo.uecdn.es/elmundo/rss/portada.xml"
 
-def get_elpais_news(limit: int = 5) -> List[Dict]:
-    """
-    Obtiene noticias recientes de El País mediante RSS feed.
-    
-    Args:
-        limit: Número máximo de noticias a retornar
-        
-    Returns:
-        Lista de diccionarios con la información de las noticias
-    """
+RSS_SOURCES = {
+    "elpais": {"url": ELPAIS_RSS, "name": "El País"},
+    "elmundo": {"url": ELMUNDO_RSS, "name": "El Mundo"},
+}
+
+def _get_rss_news(rss_url: str, source_name: str, limit: int = 5) -> List[Dict]:
+    """Obtiene noticias de un RSS feed."""
     try:
-        feed = feedparser.parse(ELPAIS_RSS)
-        
-        news_list = []
-        for entry in feed.entries[:limit]:
-            news_item = {
+        feed = feedparser.parse(rss_url)
+        return [
+            {
                 "titulo": entry.get("title", "Sin título"),
                 "descripcion": entry.get("summary", ""),
                 "url": entry.get("link", ""),
                 "fecha": entry.get("published", ""),
-                "fuente": "El País"
+                "fuente": source_name,
             }
-            news_list.append(news_item)
-        
-        return news_list
+            for entry in feed.entries[:limit]
+        ]
     except Exception as e:
-        print(f"Error obteniendo noticias de El País: {str(e)}")
+        print(f"Error obteniendo noticias de {source_name}: {str(e)}")
         return []
 
+def get_elpais_news(limit: int = 5) -> List[Dict]:
+    return _get_rss_news(ELPAIS_RSS, "El País", limit)
+
 def get_elmundo_news(limit: int = 5) -> List[Dict]:
-    """
-    Obtiene noticias recientes de El Mundo mediante RSS feed.
-    
-    Args:
-        limit: Número máximo de noticias a retornar
-        
-    Returns:
-        Lista de diccionarios con la información de las noticias
-    """
-    try:
-        feed = feedparser.parse(ELMUNDO_RSS)
-        
-        news_list = []
-        for entry in feed.entries[:limit]:
-            news_item = {
-                "titulo": entry.get("title", "Sin título"),
-                "descripcion": entry.get("summary", ""),
-                "url": entry.get("link", ""),
-                "fecha": entry.get("published", ""),
-                "fuente": "El Mundo"
-            }
-            news_list.append(news_item)
-        
-        return news_list
-    except Exception as e:
-        print(f"Error obteniendo noticias de El Mundo: {str(e)}")
-        return []
+    return _get_rss_news(ELMUNDO_RSS, "El Mundo", limit)
 
 def get_combined_news(limit_per_source: int = 5) -> Dict:
     """
@@ -91,7 +61,7 @@ def get_combined_news(limit_per_source: int = 5) -> Dict:
             key=lambda x: datetime.strptime(x['fecha'], '%a, %d %b %Y %H:%M:%S %z') if x['fecha'] else datetime.min,
             reverse=True
         )
-    except:
+    except (ValueError, TypeError):
         # Si hay error al parsear fechas, mantener el orden original
         pass
     
@@ -147,7 +117,6 @@ def format_newspapers_for_chat(news_data: Dict) -> str:
             # Limpiar HTML tags si existen
             desc = news['descripcion']
             if '<' in desc:
-                from bs4 import BeautifulSoup
                 desc = BeautifulSoup(desc, 'html.parser').get_text()
             # Limitar descripción si es muy larga
             if len(desc) > 200:
@@ -161,7 +130,7 @@ def format_newspapers_for_chat(news_data: Dict) -> str:
                 date_obj = datetime.strptime(news['fecha'], '%a, %d %b %Y %H:%M:%S %z')
                 formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
                 formatted_text += f"   📅 {formatted_date}\n"
-            except:
+            except (ValueError, TypeError):
                 formatted_text += f"   📅 {news['fecha']}\n"
         
         formatted_text += f"   🔗 {news['url']}\n\n"

@@ -3,9 +3,6 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from chatbot import chatbot, chatbot_async, chatbot_stream
-from cv import cv as cv_assistant
-from blanca import blanca as blanca_assistant
-from quote import quote as quote_assistant, QuoteResponse
 from news import get_spain_news, format_news_for_chat
 from weather import get_weather, format_weather_for_chat
 from spanish_newspapers import (
@@ -24,12 +21,6 @@ import base64
 import json
 
 app = FastAPI()
-
-class QuoteRequest(BaseModel):
-    description: str
-    interests: List[str]
-    style: str
-    language: str
 
 class AlertRequest(BaseModel):
     to: Optional[str] = None
@@ -116,23 +107,6 @@ async def summarize_memory(request: MemorySummarizeRequest, background_tasks: Ba
     background_tasks.add_task(run_memory_pipeline, request.user_id, request.messages)
     return {"status": "accepted"}
 
-
-@app.post("/cv")
-async def cv(request: ChatRequest):
-    response = cv_assistant(request.message)
-    return {"response": response}
-
-
-@app.post("/blanca")
-async def blanca(request: ChatRequest):
-    response = blanca_assistant(request.message)
-    return {"response": response}
-
-
-@app.post("/quote")
-async def quote(request: QuoteRequest) -> QuoteResponse:
-    response = quote_assistant(request.description, request.interests)
-    return response
 
 @app.get("/news")
 async def news(limit: int = 10):

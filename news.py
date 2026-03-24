@@ -1,7 +1,7 @@
 from dotenv import load_dotenv
 import os
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 
 load_dotenv()
 
@@ -107,7 +107,7 @@ def format_news_for_chat(news_data: dict) -> str:
                 date_obj = datetime.fromisoformat(news['fecha'].replace('Z', '+00:00'))
                 formatted_date = date_obj.strftime("%d/%m/%Y %H:%M")
                 formatted_text += f"   Fecha: {formatted_date}\n"
-            except:
+            except (ValueError, AttributeError):
                 formatted_text += f"   Fecha: {news['fecha']}\n"
         formatted_text += "\n"
     
