@@ -3,7 +3,7 @@ from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.tools import tool
 from dotenv import load_dotenv
 import os
@@ -60,21 +60,23 @@ def obtener_clima(ciudad: str = "Barcelona") -> str:
     return format_weather_for_chat(weather_data)
 
 @tool
-def obtener_noticias_periodicos(limite_por_fuente: int = 5, periodico: str = "ambos") -> str:
+def obtener_noticias_periodicos(limite_por_fuente: int = 3, periodico: str = "todos") -> str:
     """
-    Obtiene las noticias más recientes directamente de los periódicos El País y El Mundo.
-    Esta herramienta accede a las fuentes originales de estos periódicos.
-    Usa esta herramienta cuando el usuario específicamente pida noticias de estos periódicos
-    o cuando quiera noticias actualizadas de fuentes confiables españolas.
+    Obtiene las noticias más recientes directamente de periódicos españoles.
+    Fuentes disponibles: El País, El Mundo, La Razón, El Periódico, La Vanguardia,
+    ABC, El Español, El Confidencial, eldiario.es, Mundo Deportivo.
+    Usa esta herramienta cuando el usuario pida noticias de periódicos españoles.
 
     Args:
-        limite_por_fuente: Número de noticias a obtener de cada periódico (por defecto 5)
-        periodico: Qué periódico consultar: "ambos" (defecto), "elpais", o "elmundo"
+        limite_por_fuente: Número de noticias a obtener de cada periódico (por defecto 3)
+        periodico: Qué periódico consultar: "todos" (defecto), "elpais", "elmundo",
+                   "larazon", "elperiodico", "lavanguardia", "abc", "elespanol",
+                   "elconfidencial", "eldiario", "mundodeportivo"
 
     Returns:
         Noticias actualizadas formateadas con la fecha de hoy, listas para presentar al usuario
     """
-    if periodico.lower() == "ambos":
+    if periodico.lower() == "todos":
         news_data = get_combined_news(limit_per_source=limite_por_fuente)
     else:
         news_data = get_newspapers_by_source(source=periodico, limit=limite_por_fuente * 2)
@@ -210,8 +212,10 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
         "- Sé conciso: no abrumes con todos los datos técnicos (presión, nubosidad, etc.).\n"
         "- Ejemplo: En lugar de listar todos los números, di algo como: 'Hace 18 grados y está parcialmente nublado. Sería un buen día para dar un paseo, pero lleva un abrigo ligero.'\n\n"
         "CUANDO EL USUARIO PREGUNTA SOBRE NOTICIAS:\n"
-        "- Si pide noticias de El País, El Mundo, o de periódicos específicos, usa la herramienta obtener_noticias_periodicos.\n"
-        "- Si pide noticias generales de España, puedes usar obtener_noticias o obtener_noticias_periodicos.\n"
+        "- Si pide noticias de un periódico específico, usa obtener_noticias_periodicos con el nombre del periódico.\n"
+        "- Periódicos disponibles: El País, El Mundo, La Razón, El Periódico, La Vanguardia, ABC, El Español, El Confidencial, eldiario.es, Mundo Deportivo.\n"
+        "- Claves: elpais, elmundo, larazon, elperiodico, lavanguardia, abc, elespanol, elconfidencial, eldiario, mundodeportivo.\n"
+        "- Si pide noticias generales, puedes usar obtener_noticias o obtener_noticias_periodicos con 'todos'.\n"
         "- Las noticias de obtener_noticias_periodicos son directamente de las fuentes originales y están actualizadas.\n"
         "- Siempre menciona que las noticias son del día de hoy para dar contexto temporal.\n\n"
         "CUANDO EL USUARIO PIDE ENVIAR UNA ALERTA O MENSAJE POR WHATSAPP:\n"
@@ -225,7 +229,7 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
         "- Si el perfil es privado o no se puede acceder, explícalo amablemente.\n\n"
         "HERRAMIENTAS DISPONIBLES:\n"
         "- obtener_noticias: Noticias generales de España desde NewsAPI\n"
-        "- obtener_noticias_periodicos: Noticias directas de El País y El Mundo (RSS feeds actualizados)\n"
+        "- obtener_noticias_periodicos: Noticias directas de 10 periódicos españoles (RSS feeds actualizados)\n"
         "- obtener_clima: Clima actual de cualquier ciudad de España\n"
         "- enviar_alerta_whatsapp: Envía una alerta o mensaje por WhatsApp al cuidador o familiar\n"
         "- obtener_instagram: Obtiene información pública de un perfil de Instagram (seguidores, biografía, publicaciones)\n"
@@ -252,7 +256,7 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
     return {"role": "system", "content": content}
 
 # Module-level LLM instance (avoid recreating on every request)
-llm = ChatOpenAI(model="gpt-5.4-mini", api_key=os.getenv("OPENAI_API_KEY"))
+llm = ChatGoogleGenerativeAI(model="gemini-3.1-pro-preview", google_api_key=os.getenv("GEMINI_API_KEY"))
 llm_with_tools = llm.bind_tools(tools)
 
 def chatbot_node(state: State):
@@ -301,6 +305,18 @@ workflow.add_edge("tools", "chatbot")
 # Compile the graph
 graph = workflow.compile()
 
+def _extract_text(content) -> str:
+    """Extract plain text from LLM response content (handles Gemini's list-of-parts format)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            part.get("text", "") if isinstance(part, dict) else str(part)
+            for part in content
+        )
+    return str(content)
+
+
 def _build_messages(message: str, history: list = None):
     """Build conversation messages from history and current message."""
     messages = []
@@ -318,7 +334,7 @@ def chatbot(message: str, history: list = None, user_profile: dict = None, tutor
     messages = _build_messages(message, history)
     input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile, "user_memory": user_memory}
     result = graph.invoke(input_state)
-    return result["messages"][-1].content
+    return _extract_text(result["messages"][-1].content)
 
 
 async def chatbot_async(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None, user_memory: dict = None):
@@ -326,7 +342,7 @@ async def chatbot_async(message: str, history: list = None, user_profile: dict =
     messages = _build_messages(message, history)
     input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile, "user_memory": user_memory}
     result = await graph.ainvoke(input_state)
-    return result["messages"][-1].content
+    return _extract_text(result["messages"][-1].content)
 
 
 async def chatbot_stream(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None, user_memory: dict = None):
@@ -340,6 +356,6 @@ async def chatbot_stream(message: str, history: list = None, user_profile: dict 
         if kind == "on_chat_model_stream":
             chunk = event.get("data", {}).get("chunk")
             if chunk and hasattr(chunk, "content") and chunk.content:
-                # Only yield text content, skip tool call chunks
-                if isinstance(chunk.content, str):
-                    yield chunk.content
+                text = _extract_text(chunk.content)
+                if text:
+                    yield text

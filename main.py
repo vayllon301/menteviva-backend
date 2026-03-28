@@ -6,11 +6,11 @@ from chatbot import chatbot, chatbot_async, chatbot_stream
 from news import get_spain_news, format_news_for_chat
 from weather import get_weather, format_weather_for_chat
 from spanish_newspapers import (
-    get_combined_news, 
-    format_newspapers_for_chat, 
+    get_combined_news,
+    format_newspapers_for_chat,
     get_newspapers_by_source,
-    get_elpais_news,
-    get_elmundo_news
+    get_news_by_source,
+    RSS_SOURCES,
 )
 from voice import process_voice_message, transcribe_audio, text_to_speech
 from alert import send_whatsapp_alert
@@ -172,79 +172,45 @@ async def weather_formatted(city: str = "Madrid", country_code: str = "ES"):
     return {"response": formatted_text}
 
 @app.get("/newspapers")
-async def newspapers(source: str = "ambos", limit: int = 5):
+async def newspapers(source: str = "todos", limit: int = 3):
     """
-    Obtiene noticias recientes directamente de El País y El Mundo.
-    
+    Obtiene noticias de periódicos españoles.
+
     Args:
-        source: Fuente de noticias - "ambos" (defecto), "elpais", o "elmundo"
-        limit: Número de noticias por fuente (por defecto 5, si es "ambos" obtiene 5 de cada uno)
-    
-    Returns:
-        JSON con las noticias actualizadas de los periódicos
+        source: "todos" (defecto) o clave del periódico (elpais, elmundo, larazon,
+                elperiodico, lavanguardia, abc, elespanol, elconfidencial, eldiario, mundodeportivo)
+        limit: Noticias por fuente (por defecto 3)
     """
-    if source.lower() == "ambos":
+    if source.lower() == "todos":
         news_data = get_combined_news(limit_per_source=limit)
     else:
         news_data = get_newspapers_by_source(source=source, limit=limit)
-    
     return news_data
 
 @app.get("/newspapers/formatted")
-async def newspapers_formatted(source: str = "ambos", limit: int = 5):
+async def newspapers_formatted(source: str = "todos", limit: int = 3):
     """
     Obtiene noticias de los periódicos formateadas para chat.
-    
-    Args:
-        source: Fuente de noticias - "ambos" (defecto), "elpais", o "elmundo"
-        limit: Número de noticias por fuente (por defecto 5)
-    
-    Returns:
-        String formateado con las noticias listo para mostrar
     """
-    if source.lower() == "ambos":
+    if source.lower() == "todos":
         news_data = get_combined_news(limit_per_source=limit)
     else:
         news_data = get_newspapers_by_source(source=source, limit=limit)
-    
     formatted_text = format_newspapers_for_chat(news_data)
     return {"response": formatted_text}
 
-@app.get("/newspapers/elpais")
-async def elpais_only(limit: int = 10):
-    """
-    Obtiene noticias solo de El País.
-    
-    Args:
-        limit: Número de noticias (por defecto 10)
-    
-    Returns:
-        JSON con las noticias de El País
-    """
-    news = get_elpais_news(limit=limit)
-    return {
-        "total": len(news),
-        "fuente": "El País",
-        "news": news
-    }
+@app.get("/newspapers/sources")
+async def newspapers_sources():
+    """Lista los periódicos disponibles."""
+    return {source_key: info["name"] for source_key, info in RSS_SOURCES.items()}
 
-@app.get("/newspapers/elmundo")
-async def elmundo_only(limit: int = 10):
+@app.get("/newspapers/{source_key}")
+async def newspaper_by_source(source_key: str, limit: int = 10):
     """
-    Obtiene noticias solo de El Mundo.
-    
-    Args:
-        limit: Número de noticias (por defecto 10)
-    
-    Returns:
-        JSON con las noticias de El Mundo
+    Obtiene noticias de un periódico específico por su clave.
     """
-    news = get_elmundo_news(limit=limit)
-    return {
-        "total": len(news),
-        "fuente": "El Mundo",
-        "news": news
-    }
+    news_data = get_newspapers_by_source(source=source_key, limit=limit)
+    return news_data
 
 @app.post("/alert")
 async def alert(request: AlertRequest):
