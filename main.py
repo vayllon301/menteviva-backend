@@ -1,3 +1,5 @@
+import asyncio
+from contextlib import asynccontextmanager
 from typing import Optional, List
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
@@ -16,11 +18,26 @@ from voice import process_voice_message, transcribe_audio, text_to_speech
 from alert import send_whatsapp_alert
 from memory_service import run_memory_pipeline
 from instagram import validate_instagram_username, fetch_instagram_profile
+from reminders import (
+    list_active_reminders,
+    create_reminder,
+    update_reminder,
+    get_unread_notifications,
+    mark_notification_read,
+)
+from reminder_scheduler import scheduler_loop
 from io import BytesIO
 import base64
 import json
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app):
+    task = asyncio.create_task(scheduler_loop())
+    yield
+    task.cancel()
+
+app = FastAPI(lifespan=lifespan)
 
 class AlertRequest(BaseModel):
     to: Optional[str] = None
@@ -54,6 +71,18 @@ class InstagramLinkRequest(BaseModel):
 class MemorySummarizeRequest(BaseModel):
     user_id: str
     messages: List[dict]
+
+
+class ReminderCreateRequest(BaseModel):
+    user_id: str
+    message: str
+    remind_at: str
+    recurrence: Optional[str] = None
+    created_by: str = "tutor"
+
+
+class ReminderSnoozeRequest(BaseModel):
+    minutes: int = 10
 
 @app.get("/")
 async def root():
@@ -106,6 +135,62 @@ async def chat_stream(request: ChatRequest):
 async def summarize_memory(request: MemorySummarizeRequest, background_tasks: BackgroundTasks):
     background_tasks.add_task(run_memory_pipeline, request.user_id, request.messages)
     return {"status": "accepted"}
+
+
+@app.get("/reminders/{user_id}")
+async def get_reminders(user_id: str):
+    """List active reminders for a user."""
+    reminders_list = await list_active_reminders(user_id)
+    return {"reminders": reminders_list}
+
+
+@app.post("/reminders")
+async def post_reminder(request: ReminderCreateRequest):
+    """Create a reminder (used by tutor dashboard)."""
+    result = await create_reminder(
+        user_id=request.user_id,
+        message=request.message,
+        remind_at=request.remind_at,
+        recurrence=request.recurrence,
+        created_by=request.created_by,
+    )
+    return {"reminder": result}
+
+
+@app.patch("/reminders/{reminder_id}/snooze")
+async def snooze_reminder(reminder_id: str, request: ReminderSnoozeRequest):
+    """Snooze a reminder by N minutes."""
+    from datetime import datetime, timedelta, timezone
+
+    new_time = datetime.now(timezone.utc) + timedelta(minutes=request.minutes)
+    await update_reminder(reminder_id, {
+        "status": "snoozed",
+        "snoozed_until": new_time.isoformat(),
+        "remind_at": new_time.isoformat(),
+    })
+    await update_reminder(reminder_id, {"status": "active"})
+    return {"snoozed_until": new_time.isoformat()}
+
+
+@app.patch("/reminders/{reminder_id}/dismiss")
+async def dismiss_reminder(reminder_id: str):
+    """Dismiss (complete) a reminder."""
+    await update_reminder(reminder_id, {"status": "completed"})
+    return {"status": "completed"}
+
+
+@app.get("/notifications/{user_id}")
+async def get_notifications(user_id: str):
+    """Get unread notifications for the in-app popup."""
+    notifications = await get_unread_notifications(user_id)
+    return {"notifications": notifications}
+
+
+@app.patch("/notifications/{notification_id}/read")
+async def read_notification(notification_id: str):
+    """Mark a notification as read."""
+    await mark_notification_read(notification_id)
+    return {"status": "read"}
 
 
 @app.get("/news")
