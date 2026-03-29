@@ -13,6 +13,7 @@ from weather import get_weather, format_weather_for_chat
 from spanish_newspapers import get_combined_news, format_newspapers_for_chat, get_newspapers_by_source
 from alert import send_whatsapp_alert
 from instagram import get_instagram_info, format_instagram_for_chat
+from reminders import create_reminder, list_active_reminders
 
 load_dotenv()
 
@@ -116,8 +117,92 @@ def obtener_instagram(usuario: str) -> str:
     info = get_instagram_info(usuario)
     return format_instagram_for_chat(info)
 
+@tool
+def crear_recordatorio(mensaje: str, fecha_hora: str, recurrencia: str = "") -> str:
+    """
+    Crea un recordatorio para el usuario. IMPORTANTE: SIEMPRE pide confirmación
+    al usuario antes de llamar a esta herramienta.
+
+    Args:
+        mensaje: Texto del recordatorio (ej: "Tomar la pastilla")
+        fecha_hora: Fecha y hora en formato ISO 8601 (ej: "2026-03-29T15:00:00")
+        recurrencia: Expresión cron para recordatorios recurrentes (opcional).
+                     Ejemplos: "0 */2 * * *" (cada 2 horas), "0 9 * * *" (cada día a las 9),
+                     "0 9,14,21 * * *" (a las 9, 14 y 21h). Dejar vacío para un solo recordatorio.
+
+    Returns:
+        Confirmación del recordatorio creado
+    """
+    import asyncio
+    import concurrent.futures
+
+    recurrence = recurrencia if recurrencia else None
+    user_id = _current_user_id
+
+    if not user_id:
+        return "Error: no se pudo identificar al usuario. Inténtalo de nuevo."
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            result = pool.submit(
+                asyncio.run,
+                create_reminder(
+                    user_id=user_id,
+                    message=mensaje,
+                    remind_at=fecha_hora,
+                    recurrence=recurrence,
+                )
+            ).result()
+        if recurrence:
+            return f"Recordatorio recurrente creado: '{mensaje}'. Próximo aviso: {fecha_hora}."
+        else:
+            return f"Recordatorio creado: '{mensaje}' para el {fecha_hora}."
+    except Exception as e:
+        return f"Error al crear el recordatorio: {str(e)}"
+
+
+@tool
+def listar_recordatorios() -> str:
+    """
+    Lista los recordatorios activos del usuario. Usa esta herramienta cuando
+    el usuario pregunte qué recordatorios tiene, o quiera ver sus recordatorios.
+
+    Returns:
+        Lista formateada de recordatorios activos
+    """
+    import asyncio
+    import concurrent.futures
+
+    user_id = _current_user_id
+
+    if not user_id:
+        return "Error: no se pudo identificar al usuario."
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            reminders_list = pool.submit(
+                asyncio.run, list_active_reminders(user_id=user_id)
+            ).result()
+
+        if not reminders_list:
+            return "No tienes recordatorios activos en este momento."
+
+        lines = ["Tus recordatorios activos:\n"]
+        for r in reminders_list:
+            status_emoji = "🔁" if r.get("recurrence") else "⏰"
+            lines.append(
+                f"{status_emoji} {r['message']} — {r['remind_at']}"
+                + (f" (recurrente)" if r.get("recurrence") else "")
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error al obtener los recordatorios: {str(e)}"
+
+
 # Define the list of tools
-tools = [obtener_noticias, obtener_clima, obtener_noticias_periodicos, enviar_alerta_whatsapp, obtener_instagram]
+tools = [obtener_noticias, obtener_clima, obtener_noticias_periodicos, enviar_alerta_whatsapp, obtener_instagram, crear_recordatorio, listar_recordatorios]
+
+_current_user_id = ""
 
 class State(TypedDict):
     messages: Annotated[list, add_messages]
@@ -227,12 +312,24 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
         "- Si pregunta por cualquier otro perfil de Instagram, también puedes usar la herramienta.\n"
         "- Presenta la información de forma clara y amigable: nombre, biografía, número de seguidores y publicaciones.\n"
         "- Si el perfil es privado o no se puede acceder, explícalo amablemente.\n\n"
+        "CUANDO EL USUARIO PIDE UN RECORDATORIO:\n"
+        "- SIEMPRE confirma con el usuario antes de crear el recordatorio.\n"
+        "- Ejemplo: 'Voy a crear un recordatorio para las 15:00: tomar la pastilla. ¿Te parece bien?'\n"
+        "- Solo llama a crear_recordatorio DESPUÉS de que el usuario confirme.\n"
+        "- Convierte las horas que diga el usuario a formato ISO 8601 usando la fecha actual.\n"
+        "- Para recordatorios recurrentes, convierte a expresión cron:\n"
+        "  - 'cada 2 horas' → '0 */2 * * *'\n"
+        "  - 'todos los días a las 9' → '0 9 * * *'\n"
+        "  - 'cada día a las 9, 14 y 21' → '0 9,14,21 * * *'\n"
+        "- Si el usuario pregunta por sus recordatorios, usa listar_recordatorios.\n\n"
         "HERRAMIENTAS DISPONIBLES:\n"
         "- obtener_noticias: Noticias generales de España desde NewsAPI\n"
         "- obtener_noticias_periodicos: Noticias directas de 10 periódicos españoles (RSS feeds actualizados)\n"
         "- obtener_clima: Clima actual de cualquier ciudad de España\n"
         "- enviar_alerta_whatsapp: Envía una alerta o mensaje por WhatsApp al cuidador o familiar\n"
         "- obtener_instagram: Obtiene información pública de un perfil de Instagram (seguidores, biografía, publicaciones)\n"
+        "- crear_recordatorio: Crea un recordatorio para el usuario (siempre confirmar antes)\n"
+        "- listar_recordatorios: Lista los recordatorios activos del usuario\n"
         "- Usa estas herramientas de manera proactiva cuando sea apropiado para ayudar al usuario.\n"
     )
 
@@ -260,6 +357,11 @@ llm = ChatGoogleGenerativeAI(model="gemini-3.1-pro-preview", google_api_key=os.g
 llm_with_tools = llm.bind_tools(tools)
 
 def chatbot_node(state: State):
+    global _current_user_id
+    profile = state.get("user_profile")
+    if profile and profile.get("id"):
+        _current_user_id = profile["id"]
+
     system_message = build_system_message(state.get("user_profile"), state.get("tutor_profile"), state.get("user_memory"))
     messages = [system_message] + state["messages"]
 
