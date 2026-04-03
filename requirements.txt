@@ -1,6 +1,6 @@
 fastapi[standard]
 langgraph
-langchain-google-genai
+langchain-openai
 python-dotenv
 openai
 requests

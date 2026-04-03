@@ -3,7 +3,8 @@ from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import AIMessage, ToolMessage
+from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from dotenv import load_dotenv
 import os
@@ -14,6 +15,7 @@ from spanish_newspapers import get_combined_news, format_newspapers_for_chat, ge
 from alert import send_whatsapp_alert
 from instagram import get_instagram_info, format_instagram_for_chat
 from reminders import create_reminder, list_active_reminders
+from activities import search_activities
 
 load_dotenv()
 
@@ -199,16 +201,52 @@ def listar_recordatorios() -> str:
         return f"Error al obtener los recordatorios: {str(e)}"
 
 
+@tool
+def buscar_actividades(radio_km: int = 10) -> str:
+    """
+    Busca actividades y lugares de interes para personas mayores cerca
+    de la ubicacion del usuario. Usa esta herramienta cuando el usuario
+    pregunte por actividades, cosas que hacer, planes, talleres, centros
+    de mayores o lugares para visitar en su zona.
+
+    Args:
+        radio_km: Radio de busqueda en kilometros (por defecto 10)
+
+    Returns:
+        Lista de actividades personalizadas cerca del usuario
+    """
+    return search_activities(
+        user_profile=_current_user_profile,
+        tutor_factors=_current_tutor_factors,
+        latitude=_current_user_location.get("latitude"),
+        longitude=_current_user_location.get("longitude"),
+        radius_km=radio_km,
+    )
+
+
 # Define the list of tools
-tools = [obtener_noticias, obtener_clima, obtener_noticias_periodicos, enviar_alerta_whatsapp, obtener_instagram, crear_recordatorio, listar_recordatorios]
+tools = [
+    obtener_noticias,
+    obtener_clima,
+    obtener_noticias_periodicos,
+    enviar_alerta_whatsapp,
+    obtener_instagram,
+    crear_recordatorio,
+    listar_recordatorios,
+    buscar_actividades,
+]
 
 _current_user_id = ""
+_current_user_location = {}
+_current_user_profile = {}
+_current_tutor_factors = ""
 
 class State(TypedDict):
     messages: Annotated[list, add_messages]
     user_profile: dict
     tutor_profile: dict
     user_memory: dict
+    user_location: dict
 
 def build_system_message(user_profile: dict = None, tutor_profile: dict = None, user_memory: dict = None):
     """Build the system message, optionally personalized with user and tutor profiles."""
@@ -322,6 +360,12 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
         "  - 'todos los días a las 9' → '0 9 * * *'\n"
         "  - 'cada día a las 9, 14 y 21' → '0 9,14,21 * * *'\n"
         "- Si el usuario pregunta por sus recordatorios, usa listar_recordatorios.\n\n"
+        "CUANDO EL USUARIO PREGUNTE POR ACTIVIDADES O COSAS QUE HACER:\n"
+        "- Usa la herramienta buscar_actividades para encontrar lugares y actividades cerca del usuario.\n"
+        "- Si usas buscar_actividades, muestra 3 a 5 resultados en lista breve.\n"
+        "- Incluye para cada resultado: nombre, direccion, valoracion si existe y una recomendacion corta.\n"
+        "- Presenta los resultados de forma calida y personalizada, sin resumir toda la lista en una sola frase.\n"
+        "- Si no hay resultados, ofrece buscar en un radio mas amplio.\n\n"
         "HERRAMIENTAS DISPONIBLES:\n"
         "- obtener_noticias: Noticias generales de España desde NewsAPI\n"
         "- obtener_noticias_periodicos: Noticias directas de 10 periódicos españoles (RSS feeds actualizados)\n"
@@ -330,6 +374,7 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
         "- obtener_instagram: Obtiene información pública de un perfil de Instagram (seguidores, biografía, publicaciones)\n"
         "- crear_recordatorio: Crea un recordatorio para el usuario (siempre confirmar antes)\n"
         "- listar_recordatorios: Lista los recordatorios activos del usuario\n"
+        "- buscar_actividades: Busca actividades y lugares de interes para mayores cerca del usuario\n"
         "- Usa estas herramientas de manera proactiva cuando sea apropiado para ayudar al usuario.\n"
     )
 
@@ -353,14 +398,23 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
     return {"role": "system", "content": content}
 
 # Module-level LLM instance (avoid recreating on every request)
-llm = ChatGoogleGenerativeAI(model="gemini-3.1-pro-preview", google_api_key=os.getenv("GEMINI_API_KEY"))
+llm = ChatOpenAI(model="gpt-5.4", api_key=os.getenv("OPENAI_API_KEY"))
 llm_with_tools = llm.bind_tools(tools)
 
 def chatbot_node(state: State):
-    global _current_user_id
+    global _current_user_id, _current_user_location, _current_user_profile, _current_tutor_factors
     profile = state.get("user_profile")
     if profile and profile.get("id"):
         _current_user_id = profile["id"]
+
+    _current_user_location = state.get("user_location") or {}
+    _current_user_profile = profile or {}
+    tutor = state.get("tutor_profile") or {}
+    _current_tutor_factors = tutor.get("factors", "") or ""
+
+    last_message = state["messages"][-1] if state.get("messages") else None
+    if isinstance(last_message, ToolMessage) and last_message.name == "buscar_actividades":
+        return {"messages": [AIMessage(content=last_message.content)]}
 
     system_message = build_system_message(state.get("user_profile"), state.get("tutor_profile"), state.get("user_memory"))
     messages = [system_message] + state["messages"]
@@ -432,25 +486,26 @@ def _build_messages(message: str, history: list = None):
     return messages
 
 
-def chatbot(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None, user_memory: dict = None):
+def chatbot(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None, user_memory: dict = None, user_location: dict = None):
     messages = _build_messages(message, history)
-    input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile, "user_memory": user_memory}
+    input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile, "user_memory": user_memory, "user_location": user_location or {}}
     result = graph.invoke(input_state)
     return _extract_text(result["messages"][-1].content)
 
 
-async def chatbot_async(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None, user_memory: dict = None):
+async def chatbot_async(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None, user_memory: dict = None, user_location: dict = None):
     """Async version of chatbot using ainvoke (non-blocking)."""
     messages = _build_messages(message, history)
-    input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile, "user_memory": user_memory}
+    input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile, "user_memory": user_memory, "user_location": user_location or {}}
     result = await graph.ainvoke(input_state)
     return _extract_text(result["messages"][-1].content)
 
 
-async def chatbot_stream(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None, user_memory: dict = None):
+async def chatbot_stream(message: str, history: list = None, user_profile: dict = None, tutor_profile: dict = None, user_memory: dict = None, user_location: dict = None):
     """Async generator that yields tokens as they are produced by the LLM."""
     messages = _build_messages(message, history)
-    input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile, "user_memory": user_memory}
+    input_state = {"messages": messages, "user_profile": user_profile, "tutor_profile": tutor_profile, "user_memory": user_memory, "user_location": user_location or {}}
+    streamed_text = False
 
     async for event in graph.astream_events(input_state, version="v2"):
         kind = event.get("event")
@@ -460,4 +515,14 @@ async def chatbot_stream(message: str, history: list = None, user_profile: dict 
             if chunk and hasattr(chunk, "content") and chunk.content:
                 text = _extract_text(chunk.content)
                 if text:
+                    streamed_text = True
+                    yield text
+        elif kind == "on_chain_end" and event.get("name") == "chatbot" and not streamed_text:
+            output = event.get("data", {}).get("output", {})
+            output_messages = output.get("messages", []) if isinstance(output, dict) else []
+            if output_messages:
+                content = getattr(output_messages[-1], "content", "")
+                text = _extract_text(content)
+                if text:
+                    streamed_text = True
                     yield text

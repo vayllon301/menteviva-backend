@@ -2,6 +2,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -62,7 +63,7 @@ async def list_active_reminders(user_id: str) -> List[dict]:
 
 async def get_due_reminders() -> List[dict]:
     """Return all reminders whose remind_at is in the past and status is active."""
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = quote(datetime.now(timezone.utc).isoformat(), safe="")
     url = (
         f"{_supabase_url()}/rest/v1/reminders"
         f"?remind_at=lte.{now_iso}"

@@ -61,9 +61,12 @@ class TutorProfile(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     history: List[dict] = []
+    user_id: Optional[str] = None
     user_profile: Optional[UserProfile] = None
     tutor_profile: Optional[TutorProfile] = None
     user_memory: Optional[dict] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 class InstagramLinkRequest(BaseModel):
     username: str
@@ -94,16 +97,26 @@ async def health():
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    profile = request.user_profile.model_dump() if request.user_profile else None
+    profile = request.user_profile.model_dump() if request.user_profile else {}
+    if request.user_id:
+        profile["id"] = request.user_id
     tutor = request.tutor_profile.model_dump() if request.tutor_profile else None
-    response = await chatbot_async(request.message, history=request.history, user_profile=profile, tutor_profile=tutor, user_memory=request.user_memory)
+    user_location = {}
+    if request.latitude is not None and request.longitude is not None:
+        user_location = {"latitude": request.latitude, "longitude": request.longitude}
+    response = await chatbot_async(request.message, history=request.history, user_profile=profile or None, tutor_profile=tutor, user_memory=request.user_memory, user_location=user_location)
     return {"response": response}
 
 
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
-    profile = request.user_profile.model_dump() if request.user_profile else None
+    profile = request.user_profile.model_dump() if request.user_profile else {}
+    if request.user_id:
+        profile["id"] = request.user_id
     tutor = request.tutor_profile.model_dump() if request.tutor_profile else None
+    user_location = {}
+    if request.latitude is not None and request.longitude is not None:
+        user_location = {"latitude": request.latitude, "longitude": request.longitude}
 
     async def event_generator():
         try:
@@ -113,6 +126,7 @@ async def chat_stream(request: ChatRequest):
                 user_profile=profile,
                 tutor_profile=tutor,
                 user_memory=request.user_memory,
+                user_location=user_location,
             ):
                 # SSE format: each event is "data: <content>\n\n"
                 yield f"data: {json.dumps({'token': token})}\n\n"
