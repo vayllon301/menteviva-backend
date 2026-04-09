@@ -99,6 +99,65 @@ def _keyword_fallback_search_plan(user_profile: dict) -> dict:
     }
 
 
+GENERAL_ELDERLY_QUERIES = [
+    "parque público",
+    "centro de mayores",
+    "paseo bonito",
+    "plaza del pueblo",
+    "jardín botánico",
+    "centro cívico",
+    "cafetería tranquila",
+    "mercado municipal",
+]
+
+
+def get_general_search_plan(user_profile: dict) -> dict:
+    """
+    Build 2-3 generic, age-appropriate Google Places queries
+    based on the user's location (not their specific hobbies).
+    These are places any elderly person might enjoy.
+    """
+    city = user_profile.get("city", "") or ""
+    description = user_profile.get("description", "") or ""
+
+    prompt = (
+        "Eres un asistente que prepara búsquedas en Google Places para personas mayores.\n"
+        f"Ciudad del usuario: {city}\n"
+        f"Descripción del usuario: {description}\n\n"
+        "Genera 2 o 3 búsquedas GENERALES de lugares que cualquier persona mayor "
+        "disfrutaría, independientemente de sus aficiones concretas. "
+        "Piensa en: parques tranquilos, plazas bonitas, centros de mayores, "
+        "cafeterías acogedoras, mercados, jardines, paseos...\n"
+        "NO incluyas actividades específicas de ningún hobby.\n"
+        "Responde SOLO con un JSON object con este formato:\n"
+        '{"summary":"Breve resumen","queries":["query 1","query 2"]}\n'
+        "Las queries deben ser útiles para Google Places y tener entre 2 y 3 elementos."
+    )
+
+    llm_output = _llm_json(
+        prompt,
+        temperature=0.3,
+        max_tokens=150,
+        model=SEARCH_QUERY_MODEL,
+    )
+
+    if isinstance(llm_output, dict):
+        queries = llm_output.get("queries", [])
+        summary = llm_output.get("summary", "")
+        cleaned = [q.strip() for q in queries if isinstance(q, str) and q.strip()]
+        if cleaned:
+            return {
+                "summary": summary.strip() or "También he buscado lugares agradables por tu zona.",
+                "queries": cleaned[:3],
+            }
+
+    # Fallback: pick 2 generic queries
+    return {
+        "summary": "También he buscado lugares agradables por tu zona.",
+        "queries": GENERAL_ELDERLY_QUERIES[:2],
+    }
+
+
 def _build_search_summary_from_queries(queries: list[str]) -> str:
     if not queries:
         return "He buscado actividades interesantes cerca de ti."
@@ -108,7 +167,8 @@ def _build_search_summary_from_queries(queries: list[str]) -> str:
 
 def get_search_plan(user_profile: dict, tutor_factors: str = "") -> dict:
     """
-    Build a brief search summary and 3-5 Google Places queries from the user's profile.
+    Build a brief search summary and 3 SPECIFIC Google Places queries
+    based on the user's interests/hobbies.
     """
     interests = user_profile.get("interests", "") or ""
     description = user_profile.get("description", "") or ""
@@ -130,7 +190,8 @@ def get_search_plan(user_profile: dict, tutor_factors: str = "") -> dict:
         "Evita terminos genericos si hay una aficion clara.\n"
         "Responde SOLO con un JSON object con este formato:\n"
         '{"summary":"Breve resumen de la busqueda","queries":["query 1","query 2","query 3"]}\n'
-        "Las queries deben ser utiles para Google Places y tener entre 2 y 5 elementos."
+        "Las queries deben ser utiles para Google Places y tener EXACTAMENTE 3 elementos, "
+        "todos muy específicos a los intereses del usuario."
     )
 
     llm_output = _llm_json(
@@ -282,9 +343,20 @@ def search_places(queries: list[str], lat: float, lng: float, radius_m: int = 10
     return places
 
 
-def personalize_results(places: list[dict], user_profile: dict, tutor_factors: str = "") -> list[dict]:
+def personalize_results(
+    places: list[dict],
+    user_profile: dict,
+    tutor_factors: str = "",
+    max_results: int = 5,
+    context_hint: str = "",
+) -> list[dict]:
     """
     Use gpt-5.4-nano to rank places and add a warm recommendation.
+
+    Args:
+        max_results: How many results to return (default 5).
+        context_hint: Extra instruction for the LLM about the type of results
+                      (e.g. "general" vs "specific to interests").
     """
     if not places:
         return []
@@ -309,9 +381,11 @@ def personalize_results(places: list[dict], user_profile: dict, tutor_factors: s
     )
     if tutor_factors:
         prompt += f"- Condiciones de salud: {tutor_factors}\n"
+    if context_hint:
+        prompt += f"- Contexto: {context_hint}\n"
     prompt += (
         f"\nLugares encontrados cerca del usuario:\n{places_text}\n\n"
-        "Selecciona los 3 a 5 lugares mas apropiados para esta persona. "
+        f"Selecciona los {max_results} lugares mas apropiados para esta persona. "
         "Para cada uno, escribe una frase corta y calida explicando por que le puede interesar. "
         "Responde SOLO con un JSON array de objetos con los campos "
         '"name" y "recommendation". Ejemplo: '
@@ -344,21 +418,18 @@ def personalize_results(places: list[dict], user_profile: dict, tutor_factors: s
                     }
                 )
         if personalized:
-            return personalized[:5]
+            return personalized[:max_results]
 
     return [
         {**place, "recommendation": "Un lugar interesante cerca de ti."}
-        for place in places[:5]
+        for place in places[:max_results]
     ]
 
 
-def format_activities_for_chat(activities: list[dict], search_summary: str = "") -> str:
-    """Format the personalized activities list for the chatbot."""
-    if not activities:
-        return "No se encontraron actividades cercanas."
-
-    lines = [search_summary.strip(), ""] if search_summary.strip() else []
-    for index, activity in enumerate(activities, 1):
+def _format_activity_list(activities: list[dict], start_index: int = 1) -> list[str]:
+    """Format a list of activities into lines, starting at the given index."""
+    lines = []
+    for i, activity in enumerate(activities, start_index):
         rating_text = f"⭐ {activity['rating']}" if activity.get("rating") else ""
         open_text = (
             "Abierto ahora"
@@ -369,11 +440,43 @@ def format_activities_for_chat(activities: list[dict], search_summary: str = "")
         )
         status = " | ".join(part for part in [rating_text, open_text] if part)
 
-        lines.append(f"{index}. {activity['name']} - {activity['address']}")
+        lines.append(f"{i}. {activity['name']} - {activity['address']}")
         if status:
             lines.append(f"   {status}")
         lines.append(f"   -> {activity.get('recommendation', '')}")
         lines.append("")
+    return lines
+
+
+def format_activities_for_chat(
+    specific_activities: list[dict],
+    general_activities: list[dict],
+    specific_summary: str = "",
+    general_summary: str = "",
+) -> str:
+    """Format both specific and general activities for the chatbot."""
+    if not specific_activities and not general_activities:
+        return "No se encontraron actividades cercanas."
+
+    lines = []
+
+    # Section 1: Specific interest-based results
+    if specific_activities:
+        if specific_summary.strip():
+            lines.append(f"🎯 {specific_summary.strip()}")
+            lines.append("")
+        lines.extend(_format_activity_list(specific_activities, start_index=1))
+
+    # Section 2: General age-appropriate results
+    if general_activities:
+        if specific_activities:
+            lines.append("---")
+            lines.append("")
+        summary = general_summary.strip() or "También podrían interesarte estos lugares por tu zona:"
+        lines.append(f"🌿 {summary}")
+        lines.append("")
+        start = len(specific_activities) + 1
+        lines.extend(_format_activity_list(general_activities, start_index=start))
 
     return "\n".join(lines).strip()
 
@@ -387,6 +490,9 @@ def search_activities(
 ) -> str:
     """
     Search for personalized activities near the user.
+
+    Returns 3 specific (interest-based) + 2 general (age/location-based)
+    recommendations.
     """
     if not GOOGLE_PLACES_API_KEY:
         return "Error: no se ha configurado la clave de Google Places."
@@ -408,18 +514,50 @@ def search_activities(
         lat = geocoded["lat"]
         lng = geocoded["lng"]
 
-    search_plan = get_search_plan(user_profile or {}, tutor_factors)
-    queries = search_plan.get("queries", [])
-    places = search_places(queries, lat, lng, radius_m=radius_km * 1000)
+    radius_m = radius_km * 1000
+    profile = user_profile or {}
 
-    if not places:
+    # --- 1. Specific interest-based search (3 results) ---
+    specific_plan = get_search_plan(profile, tutor_factors)
+    specific_queries = specific_plan.get("queries", [])
+    specific_places = search_places(specific_queries, lat, lng, radius_m=radius_m)
+    specific_personalized = personalize_results(
+        specific_places,
+        profile,
+        tutor_factors,
+        max_results=3,
+        context_hint="Estos resultados son específicos para los intereses del usuario.",
+    )
+
+    # Collect place_ids already used so we don't repeat them in general results
+    used_ids = {p["place_id"] for p in specific_personalized if p.get("place_id")}
+
+    # --- 2. General age-appropriate search (2 results) ---
+    general_plan = get_general_search_plan(profile)
+    general_queries = general_plan.get("queries", [])
+    general_places_raw = search_places(general_queries, lat, lng, radius_m=radius_m)
+    # Remove duplicates that already appeared in specific results
+    general_places = [p for p in general_places_raw if p.get("place_id") not in used_ids]
+    general_personalized = personalize_results(
+        general_places,
+        profile,
+        tutor_factors,
+        max_results=2,
+        context_hint=(
+            "Estos son lugares generales que cualquier persona mayor disfrutaría. "
+            "Escribe recomendaciones cálidas sin asumir aficiones concretas."
+        ),
+    )
+
+    if not specific_personalized and not general_personalized:
         return (
             "No he encontrado actividades cercanas con ese criterio. "
             "¿Quieres que busque en un radio más amplio?"
         )
 
-    personalized = personalize_results(places, user_profile or {}, tutor_factors)
     return format_activities_for_chat(
-        personalized,
-        search_summary=search_plan.get("summary", ""),
+        specific_activities=specific_personalized,
+        general_activities=general_personalized,
+        specific_summary=specific_plan.get("summary", ""),
+        general_summary=general_plan.get("summary", ""),
     )

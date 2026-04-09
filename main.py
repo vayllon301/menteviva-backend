@@ -104,9 +104,6 @@ async def chat(request: ChatRequest):
     user_location = {}
     if request.latitude is not None and request.longitude is not None:
         user_location = {"latitude": request.latitude, "longitude": request.longitude}
-        print(f"[chat] Using GPS coordinates: {request.latitude}, {request.longitude}")
-    else:
-        print(f"[chat] No GPS coordinates received, will fall back to profile city")
     response = await chatbot_async(request.message, history=request.history, user_profile=profile or None, tutor_profile=tutor, user_memory=request.user_memory, user_location=user_location)
     return {"response": response}
 
@@ -120,9 +117,6 @@ async def chat_stream(request: ChatRequest):
     user_location = {}
     if request.latitude is not None and request.longitude is not None:
         user_location = {"latitude": request.latitude, "longitude": request.longitude}
-        print(f"[chat/stream] Using GPS coordinates: {request.latitude}, {request.longitude}")
-    else:
-        print(f"[chat/stream] No GPS coordinates received, will fall back to profile city")
 
     async def event_generator():
         try:
@@ -184,11 +178,9 @@ async def snooze_reminder(reminder_id: str, request: ReminderSnoozeRequest):
 
     new_time = datetime.now(timezone.utc) + timedelta(minutes=request.minutes)
     await update_reminder(reminder_id, {
-        "status": "snoozed",
-        "snoozed_until": new_time.isoformat(),
+        "status": "active",
         "remind_at": new_time.isoformat(),
     })
-    await update_reminder(reminder_id, {"status": "active"})
     return {"snoozed_until": new_time.isoformat()}
 
 

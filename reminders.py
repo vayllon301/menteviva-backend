@@ -79,9 +79,9 @@ async def get_due_reminders() -> List[dict]:
 async def update_reminder(reminder_id: str, updates: dict) -> None:
     """Patch a reminder row by ID."""
     url = f"{_supabase_url()}/rest/v1/reminders?id=eq.{reminder_id}"
-    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    payload = {**updates}
     async with httpx.AsyncClient() as client:
-        resp = await client.patch(url, headers=_supabase_headers(), json=updates)
+        resp = await client.patch(url, headers=_supabase_headers(), json=payload)
         resp.raise_for_status()
 
 
