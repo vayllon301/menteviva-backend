@@ -8,7 +8,8 @@ from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from dotenv import load_dotenv
 import os
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from news import get_spain_news, format_news_for_chat
 from weather import get_weather, format_weather_for_chat
 from spanish_newspapers import get_combined_news, format_newspapers_for_chat, get_newspapers_by_source
@@ -47,19 +48,21 @@ def obtener_noticias(limite: int = 5) -> str:
     return format_news_for_chat(news_data)
 
 @tool
-def obtener_clima(ciudad: str = "Barcelona") -> str:
+def obtener_clima(ciudad: str = "") -> str:
     """
     Obtiene el clima actual de una ciudad en España. Usa esta herramienta cuando el usuario
     pregunte sobre el tiempo, el clima, la temperatura o las condiciones meteorológicas.
 
     Args:
-        ciudad: Nombre de la ciudad (por defecto "Barcelona"). El usuario puede especificar
-                cualquier ciudad de España como Barcelona, Valencia, Sevilla, etc.
+        ciudad: Nombre de la ciudad. El usuario puede especificar cualquier ciudad de España
+                como Madrid, Barcelona, Valencia, Sevilla, etc. Si no se especifica, se usa
+                la ciudad del perfil del usuario.
 
     Returns:
         Información del clima formateada lista para presentar al usuario
     """
-    weather_data = get_weather(city=ciudad, country_code="ES")
+    city = ciudad or _current_user_profile.get("city") or "Madrid"
+    weather_data = get_weather(city=city, country_code="ES")
     return format_weather_for_chat(weather_data)
 
 @tool
@@ -143,6 +146,15 @@ def crear_recordatorio(mensaje: str, fecha_hora: str, recurrencia: str = "") -> 
 
     if not user_id:
         return "Error: no se pudo identificar al usuario. Inténtalo de nuevo."
+
+    # Normalize naive datetimes: if no timezone offset, assume Europe/Madrid
+    try:
+        dt = datetime.fromisoformat(fecha_hora)
+        if dt.tzinfo is None:
+            madrid_tz = ZoneInfo("Europe/Madrid")
+            fecha_hora = dt.replace(tzinfo=madrid_tz).astimezone(timezone.utc).isoformat()
+    except ValueError:
+        pass
 
     try:
         with concurrent.futures.ThreadPoolExecutor() as pool:
@@ -250,8 +262,11 @@ class State(TypedDict):
 
 def build_system_message(user_profile: dict = None, tutor_profile: dict = None, user_memory: dict = None):
     """Build the system message, optionally personalized with user and tutor profiles."""
-    today = datetime.now()
+    madrid_tz = ZoneInfo("Europe/Madrid")
+    today = datetime.now(madrid_tz)
     today_str = f"{DAYS_ES[today.weekday()]}, {today.day} de {MONTHS_ES[today.month]} de {today.year}"
+    tz_offset_raw = today.strftime("%z")  # e.g. "+0200"
+    tz_offset = f"{tz_offset_raw[:3]}:{tz_offset_raw[3:]}"  # "+02:00"
 
     profile_section = ""
     if user_profile:
@@ -311,7 +326,8 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
             )
 
     content = (
-        f"FECHA ACTUAL: {today_str}\n\n"
+        f"FECHA ACTUAL: {today_str}\n"
+        f"ZONA HORARIA: Europe/Madrid (offset actual: {tz_offset})\n\n"
         "Eres MenteViva, un asistente de IA paciente, respetuoso y cálido, diseñado específicamente para ayudar a personas mayores. "
         "Tu objetivo es brindar compañía, ayudar con las tareas diarias y fomentar la salud cognitiva.\n\n"
         f"{profile_section}"
@@ -354,7 +370,8 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
         "- SIEMPRE confirma con el usuario antes de crear el recordatorio.\n"
         "- Ejemplo: 'Voy a crear un recordatorio para las 15:00: tomar la pastilla. ¿Te parece bien?'\n"
         "- Solo llama a crear_recordatorio DESPUÉS de que el usuario confirme.\n"
-        "- Convierte las horas que diga el usuario a formato ISO 8601 usando la fecha actual.\n"
+        f"- Convierte las horas que diga el usuario a formato ISO 8601 INCLUYENDO el offset de Madrid ({tz_offset}). "
+        f"Ejemplo: si el usuario dice 'a las 8', genera '{today.strftime('%Y-%m-%d')}T08:00:00{tz_offset}'.\n"
         "- Para recordatorios recurrentes, convierte a expresión cron:\n"
         "  - 'cada 2 horas' → '0 */2 * * *'\n"
         "  - 'todos los días a las 9' → '0 9 * * *'\n"

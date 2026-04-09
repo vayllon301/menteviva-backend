@@ -257,35 +257,57 @@ def _llm_json(
         return None
 
 
+def _geocode_nominatim(city: str) -> dict:
+    """Fallback geocoder using OpenStreetMap Nominatim (free, no API key)."""
+    try:
+        response = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={
+                "q": f"{city}, España",
+                "format": "json",
+                "limit": 1,
+                "countrycodes": "es",
+            },
+            headers={"User-Agent": "MenteViva/1.0"},
+            timeout=10,
+        )
+        response.raise_for_status()
+        results = response.json()
+        if not results:
+            return {"error": f"No se encontró la ciudad '{city}'."}
+        return {"lat": float(results[0]["lat"]), "lng": float(results[0]["lon"])}
+    except requests.exceptions.RequestException as exc:
+        return {"error": f"Error al geocodificar la ciudad: {str(exc)}"}
+
+
 def geocode_city(city: str) -> dict:
     """
-    Convert a city name to lat/lng using Google Geocoding API.
+    Convert a city name to lat/lng.
+    Tries Google Geocoding API first; falls back to Nominatim (OpenStreetMap).
 
     Returns:
         {"lat": float, "lng": float} or {"error": str}
     """
-    if not GOOGLE_PLACES_API_KEY:
-        return {"error": "No se ha configurado GOOGLE_PLACES_API_KEY."}
+    if GOOGLE_PLACES_API_KEY:
+        try:
+            response = requests.get(
+                GEOCODING_URL,
+                params={
+                    "address": f"{city}, Spain",
+                    "key": GOOGLE_PLACES_API_KEY,
+                    "language": "es",
+                },
+                timeout=10,
+            )
+            response.raise_for_status()
+            results = response.json().get("results", [])
+            if results:
+                location = results[0]["geometry"]["location"]
+                return {"lat": location["lat"], "lng": location["lng"]}
+        except requests.exceptions.RequestException:
+            pass
 
-    try:
-        response = requests.get(
-            GEOCODING_URL,
-            params={
-                "address": f"{city}, Spain",
-                "key": GOOGLE_PLACES_API_KEY,
-                "language": "es",
-            },
-            timeout=10,
-        )
-        response.raise_for_status()
-        data = response.json()
-        results = data.get("results", [])
-        if not results:
-            return {"error": f"No se encontró la ciudad '{city}'."}
-        location = results[0]["geometry"]["location"]
-        return {"lat": location["lat"], "lng": location["lng"]}
-    except requests.exceptions.RequestException as exc:
-        return {"error": f"Error al geocodificar la ciudad: {str(exc)}"}
+    return _geocode_nominatim(city)
 
 
 def get_search_queries(user_profile: dict, tutor_factors: str = "") -> list[str]:
