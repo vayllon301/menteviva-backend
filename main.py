@@ -1,7 +1,8 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from typing import Optional, List
-from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from chatbot import chatbot, chatbot_async, chatbot_stream
@@ -25,7 +26,7 @@ from reminders import (
     get_unread_notifications,
     mark_notification_read,
 )
-from reminder_scheduler import scheduler_loop
+from reminder_scheduler import scheduler_loop, run_tick
 from io import BytesIO
 import base64
 import json
@@ -33,11 +34,21 @@ import json
 
 @asynccontextmanager
 async def lifespan(app):
-    task = asyncio.create_task(scheduler_loop())
+    # The in-process scheduler is unreliable on Azure App Service (the worker
+    # gets unloaded on inactivity / restarted, killing the background task).
+    # In production an external cron should hit POST /scheduler/tick instead.
+    # Set RUN_INPROCESS_SCHEDULER=1 in local .env to keep the in-process loop
+    # for development.
+    task = None
+    if os.getenv("RUN_INPROCESS_SCHEDULER") == "1":
+        task = asyncio.create_task(scheduler_loop())
     yield
-    task.cancel()
+    if task is not None:
+        task.cancel()
 
 app = FastAPI(lifespan=lifespan)
+
+SCHEDULER_SECRET = os.getenv("SCHEDULER_SECRET", "")
 
 class AlertRequest(BaseModel):
     to: Optional[str] = None
@@ -203,6 +214,22 @@ async def read_notification(notification_id: str):
     """Mark a notification as read."""
     await mark_notification_read(notification_id)
     return {"status": "read"}
+
+
+@app.post("/scheduler/tick")
+async def scheduler_tick(authorization: Optional[str] = Header(None)):
+    """Run one polling iteration of the reminder scheduler.
+
+    Intended to be called by an external cron (cron-job.org, GitHub Actions,
+    Azure Logic App, etc.) every minute. Requires SCHEDULER_SECRET env var
+    and an `Authorization: Bearer <secret>` header.
+    """
+    if not SCHEDULER_SECRET:
+        raise HTTPException(status_code=503, detail="Scheduler not configured")
+    if authorization != f"Bearer {SCHEDULER_SECRET}":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    processed = await run_tick()
+    return {"processed": processed}
 
 
 @app.get("/news")

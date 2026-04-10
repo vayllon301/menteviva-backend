@@ -89,21 +89,30 @@ async def _process_due_reminder(reminder: dict) -> None:
         logger.info("One-time reminder %s completed", reminder_id)
 
 
+async def run_tick() -> int:
+    """Run one polling iteration. Returns the number of reminders processed."""
+    processed = 0
+    try:
+        due = await get_due_reminders()
+        if due:
+            logger.info("Found %d due reminder(s)", len(due))
+        for reminder in due:
+            try:
+                await _process_due_reminder(reminder)
+                processed += 1
+            except Exception:
+                logger.exception(
+                    "Error processing reminder %s", reminder.get("id")
+                )
+    except Exception:
+        logger.exception("Error in scheduler tick")
+    return processed
+
+
 async def scheduler_loop() -> None:
-    """Main scheduler loop. Runs indefinitely, polling every POLL_INTERVAL_SECONDS."""
+    """In-process scheduler loop. Used in local dev; in production an external
+    cron should hit /scheduler/tick instead (see RUN_INPROCESS_SCHEDULER)."""
     logger.info("Reminder scheduler started (poll every %ds)", POLL_INTERVAL_SECONDS)
     while True:
-        try:
-            due = await get_due_reminders()
-            if due:
-                logger.info("Found %d due reminder(s)", len(due))
-            for reminder in due:
-                try:
-                    await _process_due_reminder(reminder)
-                except Exception:
-                    logger.exception(
-                        "Error processing reminder %s", reminder.get("id")
-                    )
-        except Exception:
-            logger.exception("Error in scheduler poll cycle")
+        await run_tick()
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
