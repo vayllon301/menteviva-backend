@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from news import get_spain_news, format_news_for_chat
 from weather import get_weather, format_weather_for_chat
 from spanish_newspapers import get_combined_news, format_newspapers_for_chat, get_newspapers_by_source
-from alert import send_whatsapp_alert
+from alert import send_sms_alert
 from instagram import get_instagram_info, format_instagram_for_chat
 from reminders import create_reminder, list_active_reminders
 from activities import search_activities
@@ -90,20 +90,48 @@ def obtener_noticias_periodicos(limite_por_fuente: int = 3, periodico: str = "to
     return format_newspapers_for_chat(news_data)
 
 @tool
-def enviar_alerta_whatsapp() -> str:
+def enviar_alerta_sms(descripcion: str = "") -> str:
     """
-    Envía una alerta predefinida por WhatsApp al cuidador o familiar del usuario.
-    Usa esta herramienta cuando el usuario pida enviar una alerta o aviso por WhatsApp,
-    o cuando detectes una situación que requiera notificar a alguien (emergencia, recordatorio importante, etc.).
+    Envía una alerta de emergencia por SMS al cuidador o familiar del usuario.
+    Usa esta herramienta cuando el usuario pida enviar una alerta o aviso,
+    o cuando detectes una situación que requiera notificar a alguien
+    (emergencia, caída, dolor, síntoma preocupante, etc.).
+
+    El nombre del usuario y su ubicación GPS se incluyen automáticamente.
+    El destinatario es el tutor/cuidador registrado en el perfil.
+
+    Args:
+        descripcion: Resumen breve (1-2 frases) de lo que ha ocurrido o por qué
+                     se envía la alerta. Por ejemplo: "Me he caído en el baño"
+                     o "Siento dolor en el pecho". Omitir si el usuario no ha
+                     dado contexto.
 
     Returns:
         Confirmación del envío o mensaje de error
     """
-    result = send_whatsapp_alert()
+    tutor_number = (_current_tutor_profile or {}).get("number") or None
+    if not tutor_number:
+        return (
+            "No se pudo enviar la alerta: no hay número de tutor configurado "
+            "en el perfil. Pide al usuario que añada el contacto del cuidador."
+        )
+
+    user_name = (_current_user_profile or {}).get("name") or None
+    latitude = (_current_user_location or {}).get("latitude")
+    longitude = (_current_user_location or {}).get("longitude")
+    description = (descripcion or "").strip()[:280] or None
+
+    result = send_sms_alert(
+        to=tutor_number,
+        user_name=user_name,
+        latitude=latitude,
+        longitude=longitude,
+        description=description,
+    )
     if result.get("error"):
         return f"No se pudo enviar la alerta: {result['error']}"
     alert_info = result["alert"]
-    return f"Alerta enviada correctamente por WhatsApp al número {alert_info['destino']}."
+    return f"Alerta enviada correctamente por SMS al número {alert_info['destino']}."
 
 @tool
 def obtener_instagram(usuario: str) -> str:
@@ -241,7 +269,7 @@ tools = [
     obtener_noticias,
     obtener_clima,
     obtener_noticias_periodicos,
-    enviar_alerta_whatsapp,
+    enviar_alerta_sms,
     obtener_instagram,
     crear_recordatorio,
     listar_recordatorios,
@@ -251,6 +279,7 @@ tools = [
 _current_user_id = ""
 _current_user_location = {}
 _current_user_profile = {}
+_current_tutor_profile = {}
 _current_tutor_factors = ""
 
 class State(TypedDict):
@@ -281,7 +310,7 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
             f"- Dirígete al usuario por su nombre ({user_profile.get('name', '')}) de forma natural y cálida.\n"
             f"- Cuando pregunte por el clima sin especificar ciudad, usa su ciudad ({user_profile.get('city', '')}).\n"
             "- Ten en cuenta sus intereses y descripción para personalizar tus respuestas y sugerencias.\n"
-            "- Usa su número de teléfono solo si necesitas enviarlo en una alerta de WhatsApp.\n\n"
+            "- Usa su número de teléfono solo si necesitas incluirlo en una alerta por SMS.\n\n"
         )
 
     tutor_section = ""
@@ -306,7 +335,7 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
             f"- El tutor/cuidador del usuario se llama {tutor_name}"
             + (f" y es su {tutor_relationship}" if tutor_relationship else "") + ".\n"
             "- Si el usuario pregunta por su cuidador o familiar responsable, puedes referirte a esta persona.\n"
-            f"- Al enviar alertas de WhatsApp, el destinatario es el tutor ({tutor_name}).\n"
+            f"- Al enviar alertas por SMS, el destinatario es el tutor ({tutor_name}).\n"
             "- No compartas los datos del tutor (teléfono, redes sociales) directamente con el usuario a menos que lo solicite.\n"
             + (f"- El tutor tiene vinculada su cuenta de Instagram: @{tutor_ig}. "
                "Puedes usar la herramienta obtener_instagram para consultar su perfil si el usuario pregunta.\n" if tutor_ig else "")
@@ -357,8 +386,12 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
         "- Si pide noticias generales, puedes usar obtener_noticias o obtener_noticias_periodicos con 'todos'.\n"
         "- Las noticias de obtener_noticias_periodicos son directamente de las fuentes originales y están actualizadas.\n"
         "- Siempre menciona que las noticias son del día de hoy para dar contexto temporal.\n\n"
-        "CUANDO EL USUARIO PIDE ENVIAR UNA ALERTA O MENSAJE POR WHATSAPP:\n"
-        "- Usa la herramienta enviar_alerta_whatsapp para enviar el mensaje.\n"
+        "CUANDO EL USUARIO PIDE ENVIAR UNA ALERTA O MENSAJE:\n"
+        "- Usa la herramienta enviar_alerta_sms para enviar la alerta por SMS al tutor.\n"
+        "- El nombre del usuario y su ubicación GPS se adjuntan automáticamente; NO los pidas.\n"
+        "- Pasa en 'descripcion' un resumen breve (1-2 frases) de lo que ha ocurrido, "
+        "basado en lo que el usuario te acaba de contar. Ejemplos: 'Me he caído en la cocina', "
+        "'Siento mareo y dolor de cabeza desde hace una hora'. Si el usuario no ha dado contexto, omite el argumento.\n"
         "- Confirma al usuario que el mensaje ha sido enviado correctamente.\n"
         "- Si hay un error, informa al usuario de forma amable y sugiere intentarlo de nuevo.\n\n"
         "CUANDO EL USUARIO PREGUNTA SOBRE INSTAGRAM:\n"
@@ -389,7 +422,7 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
         "- obtener_noticias: Noticias generales de España desde NewsAPI\n"
         "- obtener_noticias_periodicos: Noticias directas de 10 periódicos españoles (RSS feeds actualizados)\n"
         "- obtener_clima: Clima actual de cualquier ciudad de España\n"
-        "- enviar_alerta_whatsapp: Envía una alerta o mensaje por WhatsApp al cuidador o familiar\n"
+        "- enviar_alerta_sms: Envía una alerta de emergencia por SMS al cuidador o familiar\n"
         "- obtener_instagram: Obtiene información pública de un perfil de Instagram (seguidores, biografía, publicaciones)\n"
         "- crear_recordatorio: Crea un recordatorio para el usuario (siempre confirmar antes)\n"
         "- listar_recordatorios: Lista los recordatorios activos del usuario\n"
@@ -421,7 +454,7 @@ llm = ChatOpenAI(model="gpt-5.4", api_key=os.getenv("OPENAI_API_KEY"))
 llm_with_tools = llm.bind_tools(tools)
 
 def chatbot_node(state: State):
-    global _current_user_id, _current_user_location, _current_user_profile, _current_tutor_factors
+    global _current_user_id, _current_user_location, _current_user_profile, _current_tutor_profile, _current_tutor_factors
     profile = state.get("user_profile")
     if profile and profile.get("id"):
         _current_user_id = profile["id"]
@@ -429,6 +462,7 @@ def chatbot_node(state: State):
     _current_user_location = state.get("user_location") or {}
     _current_user_profile = profile or {}
     tutor = state.get("tutor_profile") or {}
+    _current_tutor_profile = tutor
     _current_tutor_factors = tutor.get("factors", "") or ""
 
     last_message = state["messages"][-1] if state.get("messages") else None

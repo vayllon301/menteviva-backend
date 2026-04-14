@@ -8,47 +8,77 @@ load_dotenv()
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
-TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "")
+TWILIO_SMS_FROM = os.getenv("TWILIO_SMS_FROM", "")
 TWILIO_WHATSAPP_TO = os.getenv("TWILIO_WHATSAPP_TO", "")
-TWILIO_TEMPLATE_SID = "HX9ac120b6997f51111427fe2c5db3a4b7"
 
 
-def _ensure_whatsapp_prefix(number: str) -> str:
-    if not number.startswith("whatsapp:"):
-        return f"whatsapp:{number}"
-    return number
+def _build_sms_body(
+    user_name: Optional[str],
+    latitude: Optional[float],
+    longitude: Optional[float],
+    description: Optional[str],
+) -> str:
+    lines = ["🚨 ALERTA DE EMERGENCIA - MenteViva"]
+    lines.append("")
+
+    if user_name:
+        lines.append(f"👤 Enviada por: {user_name}")
+    else:
+        lines.append("👤 Enviada por: usuario desconocido")
+
+    if latitude is not None and longitude is not None:
+        lines.append(f"📍 Ubicación GPS: {latitude:.6f}, {longitude:.6f}")
+        lines.append(f"🗺️ Ver en mapa: https://maps.google.com/?q={latitude},{longitude}")
+    else:
+        lines.append("📍 Ubicación: no disponible")
+
+    if description and description.strip():
+        lines.append("")
+        lines.append(f"📝 Contexto: {description.strip()}")
+
+    lines.append("")
+    lines.append("Por favor, contacte con esta persona lo antes posible.")
+    return "\n".join(lines)
 
 
-def send_whatsapp_alert(to: Optional[str] = None) -> dict:
+def send_sms_alert(
+    to: Optional[str] = None,
+    user_name: Optional[str] = None,
+    latitude: Optional[float] = None,
+    longitude: Optional[float] = None,
+    description: Optional[str] = None,
+) -> dict:
     if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
         return {
             "error": "No se han configurado TWILIO_ACCOUNT_SID y/o TWILIO_AUTH_TOKEN",
-            "alert": None
+            "alert": None,
         }
 
-    if not TWILIO_WHATSAPP_FROM:
+    if not TWILIO_SMS_FROM:
         return {
-            "error": "No se ha configurado TWILIO_WHATSAPP_FROM",
-            "alert": None
+            "error": "No se ha configurado TWILIO_SMS_FROM",
+            "alert": None,
         }
 
     recipient = to or TWILIO_WHATSAPP_TO
     if not recipient:
         return {
-            "error": "No se ha proporcionado un número de destino ni se ha configurado TWILIO_WHATSAPP_TO",
-            "alert": None
+            "error": "No se ha proporcionado un número de destino",
+            "alert": None,
         }
 
-    sender = _ensure_whatsapp_prefix(TWILIO_WHATSAPP_FROM)
-    recipient = _ensure_whatsapp_prefix(recipient)
+    # Strip any whatsapp: prefix -- we're sending SMS now
+    recipient = recipient.replace("whatsapp:", "")
+
+    body = _build_sms_body(user_name, latitude, longitude, description)
 
     try:
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
         twilio_message = client.messages.create(
-            from_=sender,
+            from_=TWILIO_SMS_FROM,
             to=recipient,
-            content_sid=TWILIO_TEMPLATE_SID,
+            body=body,
         )
 
         return {
@@ -56,17 +86,17 @@ def send_whatsapp_alert(to: Optional[str] = None) -> dict:
             "alert": {
                 "sid": twilio_message.sid,
                 "estado": twilio_message.status,
-                "destino": recipient
-            }
+                "destino": recipient,
+            },
         }
 
     except TwilioRestException as e:
         return {
             "error": f"Error de Twilio: {e.msg}",
-            "alert": None
+            "alert": None,
         }
     except Exception as e:
         return {
             "error": f"Error inesperado: {str(e)}",
-            "alert": None
+            "alert": None,
         }

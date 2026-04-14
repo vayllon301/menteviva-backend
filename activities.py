@@ -349,14 +349,16 @@ def search_places(queries: list[str], lat: float, lng: float, radius_m: int = 10
                     continue
 
                 seen_ids.add(place_id)
+                place_name = place.get("name", "")
                 places.append(
                     {
-                        "name": place.get("name", ""),
+                        "name": place_name,
                         "address": place.get("vicinity", ""),
                         "rating": place.get("rating"),
                         "open_now": place.get("opening_hours", {}).get("open_now"),
                         "types": place.get("types", []),
                         "place_id": place_id,
+                        "url": f"https://www.google.com/maps/search/?api=1&query={requests.utils.quote(place_name)}&query_place_id={place_id}",
                     }
                 )
         except requests.exceptions.RequestException:
@@ -466,6 +468,8 @@ def _format_activity_list(activities: list[dict], start_index: int = 1) -> list[
         if status:
             lines.append(f"   {status}")
         lines.append(f"   -> {activity.get('recommendation', '')}")
+        if activity.get("url"):
+            lines.append(f"   📍 {activity['url']}")
         lines.append("")
     return lines
 

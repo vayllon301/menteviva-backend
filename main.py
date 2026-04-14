@@ -16,7 +16,7 @@ from spanish_newspapers import (
     RSS_SOURCES,
 )
 from voice import process_voice_message, transcribe_audio, text_to_speech
-from alert import send_whatsapp_alert
+from alert import send_sms_alert
 from memory_service import run_memory_pipeline
 from instagram import validate_instagram_username, fetch_instagram_profile
 from reminders import (
@@ -52,6 +52,10 @@ SCHEDULER_SECRET = os.getenv("SCHEDULER_SECRET", "")
 
 class AlertRequest(BaseModel):
     to: Optional[str] = None
+    user_name: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    description: Optional[str] = None
 
 class UserProfile(BaseModel):
     name: str
@@ -339,15 +343,21 @@ async def newspaper_by_source(source_key: str, limit: int = 10):
 @app.post("/alert")
 async def alert(request: AlertRequest):
     """
-    Envía una alerta por WhatsApp usando Twilio.
+    Envía una alerta por SMS usando Twilio.
 
     Args:
-        request: JSON con 'message' (obligatorio) y 'to' (opcional, formato 'whatsapp:+34XXXXXXXXX')
+        request: JSON con campos opcionales: to, user_name, latitude, longitude, description
 
     Returns:
         JSON con el resultado del envío
     """
-    result = send_whatsapp_alert(to=request.to)
+    result = send_sms_alert(
+        to=request.to,
+        user_name=request.user_name,
+        latitude=request.latitude,
+        longitude=request.longitude,
+        description=request.description,
+    )
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])
     return result
