@@ -14,7 +14,7 @@ from news import get_spain_news, format_news_for_chat
 from weather import get_weather, format_weather_for_chat
 from spanish_newspapers import get_combined_news, format_newspapers_for_chat, get_newspapers_by_source
 from alert import send_sms_alert
-from instagram import get_instagram_info, format_instagram_for_chat
+from spotify import get_user_data_sync as spotify_get_user_data_sync, format_spotify_for_chat
 from reminders import create_reminder, list_active_reminders
 from activities import search_activities
 
@@ -134,21 +134,33 @@ def enviar_alerta_sms(descripcion: str = "") -> str:
     return f"Alerta enviada correctamente por SMS al número {alert_info['destino']}."
 
 @tool
-def obtener_instagram(usuario: str) -> str:
+def obtener_musica_spotify(tipo: str = "all") -> str:
     """
-    Obtiene información pública del perfil de Instagram de una persona.
-    Usa esta herramienta cuando el usuario pregunte sobre la cuenta de Instagram
-    de su cuidador/tutor, o cuando quiera saber información de un perfil de Instagram.
-    El nombre de usuario del tutor aparece en el perfil del tutor si está vinculado.
+    Obtiene la música de Spotify que escucha el usuario para conocer sus gustos.
+    Usa esta herramienta cuando el usuario pregunte por su música, sus canciones,
+    sus artistas favoritos, lo que ha escuchado últimamente, o cuando necesites
+    contexto sobre sus gustos musicales para personalizar sugerencias (actividades,
+    regalos, conversación, etc.).
+
+    Requiere que el usuario haya vinculado su cuenta de Spotify desde
+    "Cuentas conectadas". Si no la ha vinculado, la herramienta lo indicará.
 
     Args:
-        usuario: Nombre de usuario de Instagram (sin @). Por ejemplo: "juan.perez"
+        tipo: Qué datos obtener. Opciones:
+              - "all" (defecto): artistas top + canciones recientes + playlists
+              - "top": solo artistas y canciones más escuchados
+              - "recent": solo lo que ha escuchado recientemente
+              - "playlists": solo las playlists del usuario
 
     Returns:
-        Información del perfil de Instagram: nombre, biografía, seguidores, publicaciones, etc.
+        Resumen en texto de la actividad musical del usuario.
     """
-    info = get_instagram_info(usuario)
-    return format_instagram_for_chat(info)
+    user_id = _current_user_id
+    if not user_id:
+        return "No se pudo identificar al usuario para consultar Spotify."
+    kind = tipo if tipo in ("all", "top", "recent", "playlists") else "all"
+    data = spotify_get_user_data_sync(user_id, kind=kind)
+    return format_spotify_for_chat(data)
 
 @tool
 def crear_recordatorio(mensaje: str, fecha_hora: str, recurrencia: str = "") -> str:
@@ -270,7 +282,7 @@ tools = [
     obtener_clima,
     obtener_noticias_periodicos,
     enviar_alerta_sms,
-    obtener_instagram,
+    obtener_musica_spotify,
     crear_recordatorio,
     listar_recordatorios,
     buscar_actividades,
@@ -318,7 +330,6 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
         tutor_name = tutor_profile.get('name', 'Desconocido')
         tutor_number = tutor_profile.get('number', '')
         tutor_desc = tutor_profile.get('description', '')
-        tutor_ig = tutor_profile.get('instagram', '')
         tutor_fb = tutor_profile.get('facebook', '')
         tutor_relationship = tutor_profile.get('relationship', '')
         tutor_factors = tutor_profile.get('factors', '')
@@ -329,17 +340,13 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
             f"- Relación con el usuario: {tutor_relationship}\n"
             f"- Teléfono: {tutor_number}\n"
             f"- Descripción: {tutor_desc}\n"
-            f"- Instagram: {tutor_ig}\n"
             f"- Facebook: {tutor_fb}\n\n"
             "INSTRUCCIONES SOBRE EL TUTOR:\n"
             f"- El tutor/cuidador del usuario se llama {tutor_name}"
             + (f" y es su {tutor_relationship}" if tutor_relationship else "") + ".\n"
             "- Si el usuario pregunta por su cuidador o familiar responsable, puedes referirte a esta persona.\n"
             f"- Al enviar alertas por SMS, el destinatario es el tutor ({tutor_name}).\n"
-            "- No compartas los datos del tutor (teléfono, redes sociales) directamente con el usuario a menos que lo solicite.\n"
-            + (f"- El tutor tiene vinculada su cuenta de Instagram: @{tutor_ig}. "
-               "Puedes usar la herramienta obtener_instagram para consultar su perfil si el usuario pregunta.\n" if tutor_ig else "")
-            + "\n"
+            "- No compartas los datos del tutor (teléfono, redes sociales) directamente con el usuario a menos que lo solicite.\n\n"
         )
 
         if tutor_factors:
@@ -394,11 +401,11 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
         "'Siento mareo y dolor de cabeza desde hace una hora'. Si el usuario no ha dado contexto, omite el argumento.\n"
         "- Confirma al usuario que el mensaje ha sido enviado correctamente.\n"
         "- Si hay un error, informa al usuario de forma amable y sugiere intentarlo de nuevo.\n\n"
-        "CUANDO EL USUARIO PREGUNTA SOBRE INSTAGRAM:\n"
-        "- Si el usuario pregunta por el Instagram de su cuidador/tutor/familiar, usa la herramienta obtener_instagram con el usuario del tutor.\n"
-        "- Si pregunta por cualquier otro perfil de Instagram, también puedes usar la herramienta.\n"
-        "- Presenta la información de forma clara y amigable: nombre, biografía, número de seguidores y publicaciones.\n"
-        "- Si el perfil es privado o no se puede acceder, explícalo amablemente.\n\n"
+        "CUANDO EL USUARIO PREGUNTA SOBRE SU MÚSICA O PARA CONOCER SUS GUSTOS:\n"
+        "- Si el usuario pregunta por sus artistas, canciones, qué escucha o similar, usa la herramienta obtener_musica_spotify.\n"
+        "- También puedes usarla de forma proactiva cuando necesites inferir gustos musicales para personalizar sugerencias (por ejemplo, actividades o conversación).\n"
+        "- Si el usuario no tiene Spotify vinculado, la herramienta te avisará; en ese caso sugiérele amablemente vincularlo desde 'Cuentas conectadas' del perfil.\n"
+        "- Presenta la información con calidez: nombres de artistas, géneros, canciones recientes. No abrumes con listas largas.\n\n"
         "CUANDO EL USUARIO PIDE UN RECORDATORIO:\n"
         "- SIEMPRE confirma con el usuario antes de crear el recordatorio.\n"
         "- Ejemplo: 'Voy a crear un recordatorio para las 15:00: tomar la pastilla. ¿Te parece bien?'\n"
@@ -423,7 +430,7 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
         "- obtener_noticias_periodicos: Noticias directas de 10 periódicos españoles (RSS feeds actualizados)\n"
         "- obtener_clima: Clima actual de cualquier ciudad de España\n"
         "- enviar_alerta_sms: Envía una alerta de emergencia por SMS al cuidador o familiar\n"
-        "- obtener_instagram: Obtiene información pública de un perfil de Instagram (seguidores, biografía, publicaciones)\n"
+        "- obtener_musica_spotify: Obtiene la actividad musical del usuario en Spotify (top artistas, canciones recientes, playlists) para conocer sus gustos\n"
         "- crear_recordatorio: Crea un recordatorio para el usuario (siempre confirmar antes)\n"
         "- listar_recordatorios: Lista los recordatorios activos del usuario\n"
         "- buscar_actividades: Busca actividades y lugares de interes para mayores cerca del usuario\n"

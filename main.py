@@ -18,7 +18,8 @@ from spanish_newspapers import (
 from voice import process_voice_message, transcribe_audio, text_to_speech
 from alert import send_sms_alert
 from memory_service import run_memory_pipeline
-from instagram import validate_instagram_username, fetch_instagram_profile
+from social_google import get_status as google_get_status, get_user_data as google_get_user_data
+from spotify import get_status as spotify_get_status, get_user_data as spotify_get_user_data
 from reminders import (
     list_active_reminders,
     create_reminder,
@@ -68,7 +69,6 @@ class TutorProfile(BaseModel):
     name: str
     number: Optional[str] = None
     description: Optional[str] = None
-    instagram: Optional[str] = None
     facebook: Optional[str] = None
     relationship: Optional[str] = None
     factors: Optional[str] = None
@@ -82,9 +82,6 @@ class ChatRequest(BaseModel):
     user_memory: Optional[dict] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
-
-class InstagramLinkRequest(BaseModel):
-    username: str
 
 class MemorySummarizeRequest(BaseModel):
     user_id: str
@@ -363,48 +360,38 @@ async def alert(request: AlertRequest):
     return result
 
 
-@app.post("/tutor/instagram/link")
-async def link_instagram(request: InstagramLinkRequest):
+@app.get("/social/google/{user_id}/status")
+async def social_google_status(user_id: str):
+    """Whether the user has linked their Google account, and which scopes."""
+    return await google_get_status(user_id)
+
+
+@app.get("/social/google/{user_id}/data")
+async def social_google_data(user_id: str, kind: str = "all"):
+    """Fetch Calendar events + YouTube subscriptions for a linked user.
+
+    `kind` filters which slice to fetch: `all`, `calendar`, `youtube`.
     """
-    Valida y vincula una cuenta de Instagram al perfil del tutor.
+    if kind not in ("all", "calendar", "youtube"):
+        raise HTTPException(status_code=400, detail="kind inválido")
+    return await google_get_user_data(user_id, kind=kind)
 
-    Acepta un nombre de usuario, @usuario, o URL completa de Instagram.
-    Valida el formato y opcionalmente verifica que el perfil exista.
 
-    Returns:
-        JSON con el username validado, URL del perfil, y estado de verificación
+@app.get("/social/spotify/{user_id}/status")
+async def social_spotify_status(user_id: str):
+    """Whether the user has linked their Spotify account, and which scopes."""
+    return await spotify_get_status(user_id)
+
+
+@app.get("/social/spotify/{user_id}/data")
+async def social_spotify_data(user_id: str, kind: str = "all"):
+    """Fetch top artists + recently played + playlists for a linked user.
+
+    `kind` filters which slice to fetch: `all`, `top`, `recent`, `playlists`.
     """
-    validation = validate_instagram_username(request.username)
-
-    if validation.get("error"):
-        raise HTTPException(status_code=400, detail=validation["error"])
-
-    username = validation["username"]
-
-    # Try to verify the profile exists (best-effort, non-blocking)
-    profile_check = fetch_instagram_profile(username)
-
-    return {
-        "linked": True,
-        "username": username,
-        "profile_url": validation["profile_url"],
-        "verified": profile_check["exists"] if profile_check else None,
-    }
-
-
-@app.post("/tutor/instagram/unlink")
-async def unlink_instagram():
-    """
-    Desvincula la cuenta de Instagram del perfil del tutor.
-
-    Returns:
-        JSON confirmando la desvinculación
-    """
-    return {
-        "linked": False,
-        "username": None,
-        "profile_url": None,
-    }
+    if kind not in ("all", "top", "recent", "playlists"):
+        raise HTTPException(status_code=400, detail="kind inválido")
+    return await spotify_get_user_data(user_id, kind=kind)
 
 
 @app.post("/voice/transcribe")
