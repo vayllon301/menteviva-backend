@@ -3,6 +3,7 @@ langgraph
 langchain-openai
 python-dotenv
 openai
+httpx
 requests
 feedparser
 beautifulsoup4

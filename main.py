@@ -1,7 +1,7 @@
 import asyncio
 import os
 from contextlib import asynccontextmanager
-from typing import Optional, List
+from typing import Any, Optional, List
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -16,6 +16,8 @@ from spanish_newspapers import (
     RSS_SOURCES,
 )
 from voice import process_voice_message, transcribe_audio, text_to_speech
+from tool_registry import REALTIME_TOOLS, execute_tool
+from chatbot import build_system_message
 from alert import send_sms_alert
 from memory_service import run_memory_pipeline
 from social_google import get_status as google_get_status, get_user_data as google_get_user_data
@@ -449,6 +451,112 @@ async def voice_tts(request: TTSRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generando audio: {str(e)}")
+
+
+class RealtimeSessionRequest(BaseModel):
+    user_id: Optional[str] = None
+    user_profile: Optional[UserProfile] = None
+    tutor_profile: Optional[TutorProfile] = None
+    user_memory: Optional[dict] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+
+class RealtimeToolRequest(BaseModel):
+    name: str
+    arguments: Optional[Any] = None
+    user_id: Optional[str] = None
+    user_profile: Optional[UserProfile] = None
+    tutor_profile: Optional[TutorProfile] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+
+@app.post("/realtime/session")
+async def realtime_session(request: RealtimeSessionRequest):
+    """
+    Mint an ephemeral OpenAI Realtime session token for the browser.
+    The browser uses the returned client_secret to connect via WebRTC.
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY no configurada")
+
+    profile = request.user_profile.model_dump() if request.user_profile else None
+    tutor = request.tutor_profile.model_dump() if request.tutor_profile else None
+    sys_msg = build_system_message(profile, tutor, request.user_memory)
+    instructions = sys_msg["content"] + (
+        "\n\nIMPORTANTE PARA VOZ: Estas hablando por voz. "
+        "Responde de forma muy breve y conversacional (1-2 frases). "
+        "Evita listas, markdown o estructuras largas. "
+        "Si el usuario te interrumpe, deja de hablar y atiende su nueva peticion."
+    )
+
+    model = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-mini")
+    voice_name = os.getenv("OPENAI_REALTIME_VOICE", "alloy")
+
+    payload = {
+        "model": model,
+        "voice": voice_name,
+        "instructions": instructions,
+        "modalities": ["audio", "text"],
+        "input_audio_format": "pcm16",
+        "output_audio_format": "pcm16",
+        "input_audio_transcription": {"model": "whisper-1"},
+        "turn_detection": {
+            "type": "server_vad",
+            "threshold": 0.5,
+            "prefix_padding_ms": 300,
+            "silence_duration_ms": 500,
+            "create_response": True,
+            "interrupt_response": True,
+        },
+        "tools": REALTIME_TOOLS,
+        "tool_choice": "auto",
+    }
+
+    import httpx
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.post(
+            "https://api.openai.com/v1/realtime/sessions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "OpenAI-Beta": "realtime=v1",
+            },
+            json=payload,
+        )
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail=f"Error creando sesion Realtime: {resp.text}",
+        )
+    return resp.json()
+
+
+@app.post("/realtime/tool")
+async def realtime_tool(request: RealtimeToolRequest):
+    """
+    Execute a tool by name. Called by the frontend whenever the Realtime model
+    emits a function_call event. Result is sent back to the model as a
+    conversation.item.create with type=function_call_output.
+    """
+    profile = request.user_profile.model_dump() if request.user_profile else {}
+    if request.user_id:
+        profile["id"] = request.user_id
+    tutor = request.tutor_profile.model_dump() if request.tutor_profile else {}
+    user_location = {}
+    if request.latitude is not None and request.longitude is not None:
+        user_location = {"latitude": request.latitude, "longitude": request.longitude}
+
+    context = {
+        "user_id": request.user_id,
+        "user_profile": profile,
+        "tutor_profile": tutor,
+        "user_location": user_location,
+    }
+    result = await execute_tool(request.name, request.arguments, context)
+    return {"result": result}
 
 
 @app.post("/voice")
