@@ -12,7 +12,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 PLACES_NEARBY_URL = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
 GEOCODING_URL = "https://maps.googleapis.com/maps/api/geocode/json"
 SEARCH_QUERY_MODEL = "gpt-5.4-mini"
-RESULT_PERSONALIZATION_MODEL = "gpt-5.4-nano"
+RESULT_PERSONALIZATION_MODEL = "gpt-5.4-mini"
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
@@ -375,7 +375,7 @@ def personalize_results(
     context_hint: str = "",
 ) -> list[dict]:
     """
-    Use gpt-5.4-nano to rank places and add a warm recommendation.
+    Use gpt-5.4-mini to rank places and add a warm recommendation.
 
     Args:
         max_results: How many results to return (default 5).

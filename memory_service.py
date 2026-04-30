@@ -51,7 +51,7 @@ _llm_instance: Optional[ChatOpenAI] = None
 def _get_llm() -> ChatOpenAI:
     global _llm_instance
     if _llm_instance is None:
-        _llm_instance = ChatOpenAI(model="gpt-5-nano", temperature=0)
+        _llm_instance = ChatOpenAI(model="gpt-5.4-mini", temperature=0)
     return _llm_instance
 
 

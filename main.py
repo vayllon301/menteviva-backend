@@ -5,7 +5,7 @@ from typing import Any, Optional, List
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from chatbot import chatbot, chatbot_async, chatbot_stream
+from chatbot import chatbot_async, chatbot_stream, build_system_message
 from news import get_spain_news, format_news_for_chat
 from weather import get_weather, format_weather_for_chat
 from spanish_newspapers import (
@@ -17,7 +17,6 @@ from spanish_newspapers import (
 )
 from voice import process_voice_message, transcribe_audio, text_to_speech
 from tool_registry import REALTIME_TOOLS, execute_tool
-from chatbot import build_system_message
 from alert import send_sms_alert
 from memory_service import run_memory_pipeline
 from social_google import get_status as google_get_status, get_user_data as google_get_user_data
@@ -30,7 +29,6 @@ from reminders import (
     mark_notification_read,
 )
 from reminder_scheduler import scheduler_loop, run_tick
-from io import BytesIO
 import base64
 import json
 

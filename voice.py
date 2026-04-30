@@ -2,7 +2,7 @@ from openai import AsyncOpenAI
 from dotenv import load_dotenv
 import os
 from io import BytesIO
-from chatbot import chatbot, chatbot_async
+from chatbot import chatbot_async
 
 load_dotenv()
 

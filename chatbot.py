@@ -1,3 +1,6 @@
+import asyncio
+import concurrent.futures
+from contextvars import ContextVar
 from typing import Annotated
 from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, START, END
@@ -61,7 +64,7 @@ def obtener_clima(ciudad: str = "") -> str:
     Returns:
         Información del clima formateada lista para presentar al usuario
     """
-    city = ciudad or _current_user_profile.get("city") or "Madrid"
+    city = ciudad or _user_profile_var.get().get("city") or "Madrid"
     weather_data = get_weather(city=city, country_code="ES")
     return format_weather_for_chat(weather_data)
 
@@ -109,16 +112,17 @@ def enviar_alerta_sms(descripcion: str = "") -> str:
     Returns:
         Confirmación del envío o mensaje de error
     """
-    tutor_number = (_current_tutor_profile or {}).get("number") or None
+    tutor_number = (_tutor_profile_var.get() or {}).get("number") or None
     if not tutor_number:
         return (
             "No se pudo enviar la alerta: no hay número de tutor configurado "
             "en el perfil. Pide al usuario que añada el contacto del cuidador."
         )
 
-    user_name = (_current_user_profile or {}).get("name") or None
-    latitude = (_current_user_location or {}).get("latitude")
-    longitude = (_current_user_location or {}).get("longitude")
+    user_name = (_user_profile_var.get() or {}).get("name") or None
+    location = _user_location_var.get() or {}
+    latitude = location.get("latitude")
+    longitude = location.get("longitude")
     description = (descripcion or "").strip()[:280] or None
 
     result = send_sms_alert(
@@ -155,7 +159,7 @@ def obtener_musica_spotify(tipo: str = "all") -> str:
     Returns:
         Resumen en texto de la actividad musical del usuario.
     """
-    user_id = _current_user_id
+    user_id = _user_id_var.get()
     if not user_id:
         return "No se pudo identificar al usuario para consultar Spotify."
     kind = tipo if tipo in ("all", "top", "recent", "playlists") else "all"
@@ -178,11 +182,8 @@ def crear_recordatorio(mensaje: str, fecha_hora: str, recurrencia: str = "") -> 
     Returns:
         Confirmación del recordatorio creado
     """
-    import asyncio
-    import concurrent.futures
-
     recurrence = recurrencia if recurrencia else None
-    user_id = _current_user_id
+    user_id = _user_id_var.get()
 
     if not user_id:
         return "Error: no se pudo identificar al usuario. Inténtalo de nuevo."
@@ -224,10 +225,7 @@ def listar_recordatorios() -> str:
     Returns:
         Lista formateada de recordatorios activos
     """
-    import asyncio
-    import concurrent.futures
-
-    user_id = _current_user_id
+    user_id = _user_id_var.get()
 
     if not user_id:
         return "Error: no se pudo identificar al usuario."
@@ -267,11 +265,12 @@ def buscar_actividades(radio_km: int = 10) -> str:
     Returns:
         Lista de actividades personalizadas cerca del usuario
     """
+    location = _user_location_var.get()
     return search_activities(
-        user_profile=_current_user_profile,
-        tutor_factors=_current_tutor_factors,
-        latitude=_current_user_location.get("latitude"),
-        longitude=_current_user_location.get("longitude"),
+        user_profile=_user_profile_var.get(),
+        tutor_factors=_tutor_factors_var.get(),
+        latitude=location.get("latitude"),
+        longitude=location.get("longitude"),
         radius_km=radio_km,
     )
 
@@ -288,11 +287,15 @@ tools = [
     buscar_actividades,
 ]
 
-_current_user_id = ""
-_current_user_location = {}
-_current_user_profile = {}
-_current_tutor_profile = {}
-_current_tutor_factors = ""
+# Per-task context (isolated across concurrent requests). Plain module globals
+# would leak data between users hitting the chatbot at the same time, so we use
+# contextvars — each FastAPI request runs in its own asyncio task, and each task
+# has its own copy of these values.
+_user_id_var: ContextVar[str] = ContextVar("menteviva_user_id", default="")
+_user_location_var: ContextVar[dict] = ContextVar("menteviva_user_location", default={})
+_user_profile_var: ContextVar[dict] = ContextVar("menteviva_user_profile", default={})
+_tutor_profile_var: ContextVar[dict] = ContextVar("menteviva_tutor_profile", default={})
+_tutor_factors_var: ContextVar[str] = ContextVar("menteviva_tutor_factors", default="")
 
 class State(TypedDict):
     messages: Annotated[list, add_messages]
@@ -457,20 +460,17 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
     return {"role": "system", "content": content}
 
 # Module-level LLM instance (avoid recreating on every request)
-llm = ChatOpenAI(model="gpt-5.4", api_key=os.getenv("OPENAI_API_KEY"))
+llm = ChatOpenAI(model="gpt-5.4-mini", api_key=os.getenv("OPENAI_API_KEY"))
 llm_with_tools = llm.bind_tools(tools)
 
 def chatbot_node(state: State):
-    global _current_user_id, _current_user_location, _current_user_profile, _current_tutor_profile, _current_tutor_factors
-    profile = state.get("user_profile")
-    if profile and profile.get("id"):
-        _current_user_id = profile["id"]
-
-    _current_user_location = state.get("user_location") or {}
-    _current_user_profile = profile or {}
+    profile = state.get("user_profile") or {}
     tutor = state.get("tutor_profile") or {}
-    _current_tutor_profile = tutor
-    _current_tutor_factors = tutor.get("factors", "") or ""
+    _user_id_var.set(profile.get("id", "") or "")
+    _user_location_var.set(state.get("user_location") or {})
+    _user_profile_var.set(profile)
+    _tutor_profile_var.set(tutor)
+    _tutor_factors_var.set(tutor.get("factors", "") or "")
 
     last_message = state["messages"][-1] if state.get("messages") else None
     if isinstance(last_message, ToolMessage) and last_message.name == "buscar_actividades":
@@ -522,7 +522,7 @@ workflow.add_edge("tools", "chatbot")
 graph = workflow.compile()
 
 def _extract_text(content) -> str:
-    """Extract plain text from LLM response content (handles Gemini's list-of-parts format)."""
+    """Extract plain text from LLM response content (handles list-of-parts format)."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
