@@ -1,11 +1,13 @@
 import asyncio
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Any, Optional, List
+from zoneinfo import ZoneInfo
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Header
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from chatbot import chatbot_async, chatbot_stream, build_system_message
+from chatbot import chatbot_async, chatbot_stream
 from news import get_spain_news, format_news_for_chat
 from weather import get_weather, format_weather_for_chat
 from spanish_newspapers import (
@@ -470,6 +472,93 @@ class RealtimeToolRequest(BaseModel):
     longitude: Optional[float] = None
 
 
+def _clip_for_prompt(value: Any, max_chars: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "..."
+
+
+def _build_realtime_instructions(
+    profile: Optional[dict],
+    tutor: Optional[dict],
+    user_memory: Optional[dict],
+) -> str:
+    madrid_now = datetime.now(ZoneInfo("Europe/Madrid"))
+    tz_offset_raw = madrid_now.strftime("%z")
+    tz_offset = f"{tz_offset_raw[:3]}:{tz_offset_raw[3:]}"
+    lines = [
+        "Eres MenteViva, un asistente de voz para personas mayores.",
+        (
+            "Responde siempre en espanol claro, calido y muy breve: "
+            "normalmente 1-2 frases cortas."
+        ),
+        (
+            f"Fecha y hora actual: {madrid_now.strftime('%Y-%m-%d %H:%M')} "
+            f"Europe/Madrid ({tz_offset})."
+        ),
+        "Si el usuario te interrumpe, deja de hablar y atiende la nueva peticion.",
+    ]
+
+    if profile:
+        profile_bits = []
+        if profile.get("name"):
+            profile_bits.append(f"nombre={_clip_for_prompt(profile.get('name'), 60)}")
+        if profile.get("city"):
+            profile_bits.append(f"ciudad={_clip_for_prompt(profile.get('city'), 60)}")
+        if profile.get("interests"):
+            profile_bits.append(f"intereses={_clip_for_prompt(profile.get('interests'), 180)}")
+        if profile.get("description"):
+            profile_bits.append(f"descripcion={_clip_for_prompt(profile.get('description'), 180)}")
+        if profile_bits:
+            lines.append("Perfil del usuario: " + "; ".join(profile_bits) + ".")
+
+    if tutor:
+        tutor_bits = []
+        if tutor.get("name"):
+            tutor_bits.append(f"nombre={_clip_for_prompt(tutor.get('name'), 60)}")
+        if tutor.get("relationship"):
+            tutor_bits.append(f"relacion={_clip_for_prompt(tutor.get('relationship'), 60)}")
+        if tutor_bits:
+            lines.append("Tutor/cuidador: " + "; ".join(tutor_bits) + ".")
+        if tutor.get("factors"):
+            lines.append(
+                "Factores importantes del usuario: "
+                + _clip_for_prompt(tutor.get("factors"), 260)
+                + "."
+            )
+
+    if user_memory:
+        narrative = _clip_for_prompt(user_memory.get("narrative"), 320)
+        facts = user_memory.get("facts") or []
+        fact_texts = []
+        for fact in facts[:5]:
+            if isinstance(fact, dict) and fact.get("text"):
+                fact_texts.append(_clip_for_prompt(fact.get("text"), 90))
+        if narrative:
+            lines.append("Memoria resumida: " + narrative)
+        if fact_texts:
+            lines.append("Hechos utiles: " + "; ".join(fact_texts) + ".")
+
+    lines.extend(
+        [
+            (
+                "Usa herramientas solo cuando hagan falta: clima, noticias, alerta SMS, "
+                "Spotify, recordatorios y actividades cercanas."
+            ),
+            (
+                "Para recordatorios, confirma antes de crearlos y usa ISO 8601 con "
+                f"offset de Madrid ({tz_offset})."
+            ),
+            (
+                "Para emergencias o alertas, usa enviar_alerta_sms si el usuario lo "
+                "pide explicitamente o describe una situacion de riesgo."
+            ),
+        ]
+    )
+    return "\n".join(lines)
+
+
 @app.post("/realtime/session")
 async def realtime_session(request: RealtimeSessionRequest):
     """
@@ -482,45 +571,48 @@ async def realtime_session(request: RealtimeSessionRequest):
 
     profile = request.user_profile.model_dump() if request.user_profile else None
     tutor = request.tutor_profile.model_dump() if request.tutor_profile else None
-    sys_msg = build_system_message(profile, tutor, request.user_memory)
-    instructions = sys_msg["content"] + (
-        "\n\nIMPORTANTE PARA VOZ: Estas hablando por voz. "
-        "Responde de forma muy breve y conversacional (1-2 frases). "
-        "Evita listas, markdown o estructuras largas. "
-        "Si el usuario te interrumpe, deja de hablar y atiende su nueva peticion."
-    )
+    instructions = _build_realtime_instructions(profile, tutor, request.user_memory)
 
-    model = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-mini")
+    model = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-1.5")
     voice_name = os.getenv("OPENAI_REALTIME_VOICE", "alloy")
+    transcription_model = os.getenv("OPENAI_REALTIME_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
 
     payload = {
-        "model": model,
-        "voice": voice_name,
-        "instructions": instructions,
-        "modalities": ["audio", "text"],
-        "input_audio_format": "pcm16",
-        "output_audio_format": "pcm16",
-        "input_audio_transcription": {"model": "whisper-1"},
-        "turn_detection": {
-            "type": "server_vad",
-            "threshold": 0.5,
-            "prefix_padding_ms": 300,
-            "silence_duration_ms": 500,
-            "create_response": True,
-            "interrupt_response": True,
+        "session": {
+            "type": "realtime",
+            "model": model,
+            "instructions": instructions,
+            "output_modalities": ["audio"],
+            "audio": {
+                "input": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "transcription": {"model": transcription_model, "language": "es"},
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 500,
+                        "create_response": True,
+                        "interrupt_response": True,
+                    },
+                },
+                "output": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "voice": voice_name,
+                },
+            },
+            "tools": REALTIME_TOOLS,
+            "tool_choice": "auto",
         },
-        "tools": REALTIME_TOOLS,
-        "tool_choice": "auto",
     }
 
     import httpx
     async with httpx.AsyncClient(timeout=20.0) as client:
         resp = await client.post(
-            "https://api.openai.com/v1/realtime/sessions",
+            "https://api.openai.com/v1/realtime/client_secrets",
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
-                "OpenAI-Beta": "realtime=v1",
             },
             json=payload,
         )
