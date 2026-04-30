@@ -454,6 +454,7 @@ async def voice_tts(request: TTSRequest):
 
 
 class RealtimeSessionRequest(BaseModel):
+    sdp: Optional[str] = None
     user_id: Optional[str] = None
     user_profile: Optional[UserProfile] = None
     tutor_profile: Optional[TutorProfile] = None
@@ -562,8 +563,9 @@ def _build_realtime_instructions(
 @app.post("/realtime/session")
 async def realtime_session(request: RealtimeSessionRequest):
     """
-    Mint an ephemeral OpenAI Realtime session token for the browser.
-    The browser uses the returned client_secret to connect via WebRTC.
+    Create an OpenAI Realtime WebRTC call.
+    When the browser sends SDP, return the OpenAI SDP answer directly.
+    The no-SDP path is kept for compatibility with older clients.
     """
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -573,53 +575,67 @@ async def realtime_session(request: RealtimeSessionRequest):
     tutor = request.tutor_profile.model_dump() if request.tutor_profile else None
     instructions = _build_realtime_instructions(profile, tutor, request.user_memory)
 
-    model = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-1.5")
-    voice_name = os.getenv("OPENAI_REALTIME_VOICE", "alloy")
+    model = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-mini")
+    voice_name = os.getenv("OPENAI_REALTIME_VOICE", "marin")
     transcription_model = os.getenv("OPENAI_REALTIME_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
 
-    payload = {
-        "session": {
-            "type": "realtime",
-            "model": model,
-            "instructions": instructions,
-            "output_modalities": ["audio"],
-            "audio": {
-                "input": {
-                    "format": {"type": "audio/pcm", "rate": 24000},
-                    "transcription": {"model": transcription_model, "language": "es"},
-                    "turn_detection": {
-                        "type": "server_vad",
-                        "threshold": 0.5,
-                        "prefix_padding_ms": 300,
-                        "silence_duration_ms": 500,
-                        "create_response": True,
-                        "interrupt_response": True,
-                    },
-                },
-                "output": {
-                    "format": {"type": "audio/pcm", "rate": 24000},
-                    "voice": voice_name,
+    session_config = {
+        "type": "realtime",
+        "model": model,
+        "instructions": instructions,
+        "max_output_tokens": 220,
+        "output_modalities": ["audio"],
+        "audio": {
+            "input": {
+                "format": {"type": "audio/pcm", "rate": 24000},
+                "transcription": {"model": transcription_model, "language": "es"},
+                "turn_detection": {
+                    "type": "server_vad",
+                    "threshold": 0.5,
+                    "prefix_padding_ms": 300,
+                    "silence_duration_ms": 500,
+                    "create_response": True,
+                    "interrupt_response": True,
                 },
             },
-            "tools": REALTIME_TOOLS,
-            "tool_choice": "auto",
+            "output": {
+                "format": {"type": "audio/pcm", "rate": 24000},
+                "voice": voice_name,
+            },
         },
+        "tools": REALTIME_TOOLS,
+        "tool_choice": "auto",
     }
 
     import httpx
     async with httpx.AsyncClient(timeout=20.0) as client:
-        resp = await client.post(
-            "https://api.openai.com/v1/realtime/client_secrets",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
+        if request.sdp:
+            resp = await client.post(
+                "https://api.openai.com/v1/realtime/calls",
+                headers={"Authorization": f"Bearer {api_key}"},
+                files={
+                    "sdp": (None, request.sdp, "application/sdp"),
+                    "session": (None, json.dumps(session_config), "application/json"),
+                },
+            )
+        else:
+            resp = await client.post(
+                "https://api.openai.com/v1/realtime/client_secrets",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={"session": session_config},
+            )
     if resp.status_code >= 400:
         raise HTTPException(
             status_code=resp.status_code,
             detail=f"Error creando sesion Realtime: {resp.text}",
+        )
+    if request.sdp:
+        return StreamingResponse(
+            iter([resp.text]),
+            media_type="application/sdp",
         )
     return resp.json()
 
