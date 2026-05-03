@@ -4,8 +4,9 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Optional, List
 from zoneinfo import ZoneInfo
-from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Header
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Header, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
+import websockets as websockets_client
 from pydantic import BaseModel
 from chatbot import chatbot_async, chatbot_stream
 from news import get_spain_news, format_news_for_chat
@@ -454,7 +455,6 @@ async def voice_tts(request: TTSRequest):
 
 
 class RealtimeSessionRequest(BaseModel):
-    sdp: Optional[str] = None
     user_id: Optional[str] = None
     user_profile: Optional[UserProfile] = None
     tutor_profile: Optional[TutorProfile] = None
@@ -560,84 +560,259 @@ def _build_realtime_instructions(
     return "\n".join(lines)
 
 
+XAI_REALTIME_URL = os.getenv("XAI_REALTIME_URL", "wss://api.x.ai/v1/realtime")
+XAI_REALTIME_MODEL = os.getenv("XAI_REALTIME_MODEL", "grok-voice-think-fast-1.0")
+XAI_REALTIME_VOICE = os.getenv("XAI_REALTIME_VOICE", "c630b236")
+
+
+def _get_xai_api_key() -> Optional[str]:
+    # Backward-compatible alias: some deployments still use X_API_KEY.
+    return os.getenv("XAI_API_KEY") or os.getenv("X_API_KEY")
+
+
+def _build_realtime_session(
+    profile: Optional[dict],
+    tutor: Optional[dict],
+    user_memory: Optional[dict],
+) -> dict:
+    instructions = _build_realtime_instructions(profile, tutor, user_memory)
+    return {
+        "voice": XAI_REALTIME_VOICE,
+        "instructions": instructions,
+        "turn_detection": {"type": "server_vad"},
+        "tools": REALTIME_TOOLS,
+    }
+
+
+def _extract_realtime_function_call(payload: dict) -> Optional[dict]:
+    """
+    Extract a function call from xAI/OpenAI-Realtime style events.
+
+    Supported event shapes:
+    - response.output_item.done with item.type=function_call
+    - conversation.item.created with item.type=function_call
+    - response.function_call_arguments.done
+    """
+    if not isinstance(payload, dict):
+        return None
+
+    event_type = payload.get("type")
+    item = None
+
+    if event_type in {"response.output_item.done", "conversation.item.created"}:
+        candidate = payload.get("item")
+        if isinstance(candidate, dict):
+            item = candidate
+    elif event_type == "response.function_call_arguments.done":
+        name = payload.get("name")
+        call_id = payload.get("call_id")
+        if name and call_id:
+            return {
+                "name": name,
+                "arguments": payload.get("arguments"),
+                "call_id": call_id,
+            }
+
+    if not isinstance(item, dict) or item.get("type") != "function_call":
+        return None
+
+    name = item.get("name")
+    call_id = item.get("call_id")
+    if not name or not call_id:
+        return None
+
+    return {
+        "name": name,
+        "arguments": item.get("arguments"),
+        "call_id": call_id,
+    }
+
+
+async def _send_realtime_tool_result(
+    xai_ws: Any,
+    tool_call: dict,
+    context: dict,
+) -> None:
+    result = await execute_tool(
+        str(tool_call["name"]),
+        tool_call.get("arguments"),
+        context,
+    )
+    await xai_ws.send(
+        json.dumps(
+            {
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "function_call_output",
+                    "call_id": str(tool_call["call_id"]),
+                    "output": result,
+                },
+            }
+        )
+    )
+    await xai_ws.send(json.dumps({"type": "response.create"}))
+
+
+@app.websocket("/realtime/ws")
+async def realtime_ws(ws: WebSocket):
+    """
+    Bidirectional relay between the browser and xAI's Realtime WebSocket API.
+
+    Flow:
+      1. Browser connects, sends one JSON init message with user context.
+      2. Backend dials wss://api.x.ai/v1/realtime?model=...
+      3. Backend sends session.update (instructions + tools) to xAI.
+      4. By default, backend executes function calls and sends
+         function_call_output automatically.
+      5. If init message includes {"tool_call_handler":"frontend"}, backend
+         only relays and frontend can handle tools via POST /realtime/tool.
+    """
+    await ws.accept()
+    api_key = _get_xai_api_key()
+    if not api_key:
+        await ws.send_json(
+            {
+                "type": "error",
+                "error": {"message": "XAI_API_KEY no configurada (o X_API_KEY)"},
+            }
+        )
+        await ws.close()
+        return
+
+    try:
+        init_msg = await ws.receive_json()
+    except WebSocketDisconnect:
+        return
+    except Exception as e:
+        await ws.send_json(
+            {"type": "error", "error": {"message": f"init invalido: {e}"}}
+        )
+        await ws.close()
+        return
+
+    profile = init_msg.get("user_profile")
+    if not isinstance(profile, dict):
+        profile = {}
+
+    tutor = init_msg.get("tutor_profile")
+    if not isinstance(tutor, dict):
+        tutor = {}
+
+    memory = init_msg.get("user_memory")
+    user_id = init_msg.get("user_id") or profile.get("id")
+    if user_id and not profile.get("id"):
+        profile["id"] = user_id
+
+    user_location = {}
+    latitude = init_msg.get("latitude")
+    longitude = init_msg.get("longitude")
+    if latitude is not None and longitude is not None:
+        user_location = {"latitude": latitude, "longitude": longitude}
+
+    tool_call_handler = str(init_msg.get("tool_call_handler") or "backend").lower()
+    backend_handles_tools = tool_call_handler != "frontend"
+    tool_context = {
+        "user_id": user_id,
+        "user_profile": profile,
+        "tutor_profile": tutor,
+        "user_location": user_location,
+    }
+    handled_tool_call_ids: set[str] = set()
+
+    session_config = _build_realtime_session(profile, tutor, memory)
+
+    xai_url = f"{XAI_REALTIME_URL}?model={XAI_REALTIME_MODEL}"
+    try:
+        async with websockets_client.connect(
+            xai_url,
+            additional_headers={"Authorization": f"Bearer {api_key}"},
+            max_size=16 * 1024 * 1024,
+            ping_interval=20,
+        ) as xai_ws:
+            await xai_ws.send(
+                json.dumps({"type": "session.update", "session": session_config})
+            )
+            await ws.send_json({"type": "relay.ready"})
+
+            async def client_to_xai():
+                try:
+                    while True:
+                        msg = await ws.receive_text()
+                        await xai_ws.send(msg)
+                except WebSocketDisconnect:
+                    return
+                except Exception:
+                    return
+
+            async def xai_to_client():
+                try:
+                    async for msg in xai_ws:
+                        if isinstance(msg, bytes):
+                            msg = msg.decode("utf-8", errors="ignore")
+
+                        if backend_handles_tools:
+                            try:
+                                payload = json.loads(msg)
+                            except json.JSONDecodeError:
+                                payload = None
+
+                            if isinstance(payload, dict):
+                                tool_call = _extract_realtime_function_call(payload)
+                                if tool_call:
+                                    call_id = str(tool_call["call_id"])
+                                    if call_id not in handled_tool_call_ids:
+                                        handled_tool_call_ids.add(call_id)
+                                        await _send_realtime_tool_result(
+                                            xai_ws=xai_ws,
+                                            tool_call=tool_call,
+                                            context=tool_context,
+                                        )
+                        await ws.send_text(msg)
+                except websockets_client.ConnectionClosed:
+                    return
+                except Exception:
+                    return
+
+            done, pending = await asyncio.wait(
+                {
+                    asyncio.create_task(client_to_xai()),
+                    asyncio.create_task(xai_to_client()),
+                },
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+    except Exception as e:
+        try:
+            await ws.send_json({"type": "error", "error": {"message": str(e)}})
+        except Exception:
+            pass
+    finally:
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
+
 @app.post("/realtime/session")
 async def realtime_session(request: RealtimeSessionRequest):
     """
-    Create an OpenAI Realtime WebRTC call.
-    When the browser sends SDP, return the OpenAI SDP answer directly.
-    The no-SDP path is kept for compatibility with older clients.
+    Returns the metadata the browser needs to open the realtime WebSocket.
+    Kept as POST so the same /api/realtime/session Next.js proxy keeps working;
+    the response shape changed from SDP to a small JSON config.
     """
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY no configurada")
-
-    profile = request.user_profile.model_dump() if request.user_profile else None
-    tutor = request.tutor_profile.model_dump() if request.tutor_profile else None
-    instructions = _build_realtime_instructions(profile, tutor, request.user_memory)
-
-    model = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-mini")
-    voice_name = os.getenv("OPENAI_REALTIME_VOICE", "marin")
-    transcription_model = os.getenv("OPENAI_REALTIME_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
-
-    session_config = {
-        "type": "realtime",
-        "model": model,
-        "instructions": instructions,
-        "max_output_tokens": 220,
-        "output_modalities": ["audio"],
-        "audio": {
-            "input": {
-                "format": {"type": "audio/pcm", "rate": 24000},
-                "transcription": {"model": transcription_model, "language": "es"},
-                "turn_detection": {
-                    "type": "server_vad",
-                    "threshold": 0.5,
-                    "prefix_padding_ms": 300,
-                    "silence_duration_ms": 500,
-                    "create_response": True,
-                    "interrupt_response": True,
-                },
-            },
-            "output": {
-                "format": {"type": "audio/pcm", "rate": 24000},
-                "voice": voice_name,
-            },
-        },
-        "tools": REALTIME_TOOLS,
-        "tool_choice": "auto",
-    }
-
-    import httpx
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        if request.sdp:
-            resp = await client.post(
-                "https://api.openai.com/v1/realtime/calls",
-                headers={"Authorization": f"Bearer {api_key}"},
-                files={
-                    "sdp": (None, request.sdp, "application/sdp"),
-                    "session": (None, json.dumps(session_config), "application/json"),
-                },
-            )
-        else:
-            resp = await client.post(
-                "https://api.openai.com/v1/realtime/client_secrets",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={"session": session_config},
-            )
-    if resp.status_code >= 400:
+    if not _get_xai_api_key():
         raise HTTPException(
-            status_code=resp.status_code,
-            detail=f"Error creando sesion Realtime: {resp.text}",
+            status_code=500, detail="XAI_API_KEY no configurada (o X_API_KEY)"
         )
-    if request.sdp:
-        return StreamingResponse(
-            iter([resp.text]),
-            media_type="application/sdp",
-        )
-    return resp.json()
+    return {
+        "ws_path": "/realtime/ws",
+        "model": XAI_REALTIME_MODEL,
+        "voice": XAI_REALTIME_VOICE,
+        "tool_call_handler": "backend",
+        "input_sample_rate": 24000,
+        "output_sample_rate": 24000,
+    }
 
 
 @app.post("/realtime/tool")
