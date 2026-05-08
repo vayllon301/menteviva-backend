@@ -27,8 +27,9 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
 
-      # 🛠️ Local Build Section (Optional)
-      # Install from pyproject.toml + uv.lock (no requirements.txt). Catches resolver/lock issues before deploy.
+      # 🛠️ Validate deps before deploy
+      # - uv.lock: frozen install same as local dev
+      # - requirements.txt: must stay in repo — Azure Oryx uses pip -r requirements.txt when present (reliable on App Service)
       - name: Install dependencies from lockfile
         run: uv sync --frozen --no-group dev
 
