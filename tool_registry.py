@@ -48,8 +48,8 @@ REALTIME_TOOLS: list[dict] = [
         "type": "function",
         "name": "obtener_clima",
         "description": (
-            "Obtiene el clima actual de una ciudad espanola. Si no se indica "
-            "ciudad, usa la del perfil del usuario."
+            "Obtiene el clima actual. Si no se indica ciudad, usa el GPS del "
+            "usuario y, si no esta disponible, la ciudad del perfil."
         ),
         "parameters": {
             "type": "object",
@@ -168,9 +168,25 @@ async def _tool_obtener_noticias(args: dict, ctx: dict) -> str:
 
 async def _tool_obtener_clima(args: dict, ctx: dict) -> str:
     ciudad = (args.get("ciudad") or "").strip()
-    if not ciudad:
-        ciudad = (ctx.get("user_profile") or {}).get("city") or "Madrid"
-    data = await asyncio.to_thread(get_weather, city=ciudad, country_code="ES")
+    location = ctx.get("user_location") or {}
+    latitude = location.get("latitude")
+    longitude = location.get("longitude")
+    if ciudad:
+        data = await asyncio.to_thread(get_weather, city=ciudad, country_code="ES")
+    elif latitude is not None and longitude is not None:
+        data = await asyncio.to_thread(
+            get_weather,
+            city="",
+            country_code="ES",
+            latitude=latitude,
+            longitude=longitude,
+        )
+    else:
+        data = await asyncio.to_thread(
+            get_weather,
+            city=(ctx.get("user_profile") or {}).get("city") or "Madrid",
+            country_code="ES",
+        )
     return format_weather_for_chat(data)
 
 

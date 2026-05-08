@@ -9,13 +9,20 @@ load_dotenv()
 WEATHER_API_KEY = os.getenv("WEATHER_API_KEY", "")
 WEATHER_API_URL = "http://api.weatherapi.com/v1/current.json"
 
-def get_weather(city: str = "Madrid", country_code: str = "ES"):
+def get_weather(
+    city: str = "Madrid",
+    country_code: str = "ES",
+    latitude: float | None = None,
+    longitude: float | None = None,
+):
     """
     Obtiene el clima actual de una ciudad usando WeatherAPI.com.
     
     Args:
         city: Nombre de la ciudad (por defecto "Madrid")
         country_code: Código del país (por defecto "ES" para España)
+        latitude: Latitud GPS opcional
+        longitude: Longitud GPS opcional
         
     Returns:
         Un diccionario con información del clima o un mensaje de error
@@ -27,10 +34,13 @@ def get_weather(city: str = "Madrid", country_code: str = "ES"):
         }
     
     try:
+        has_coordinates = latitude is not None and longitude is not None
+        query = f"{latitude},{longitude}" if has_coordinates else f"{city},{country_code}"
+
         # Parámetros para obtener el clima
         params = {
             "key": WEATHER_API_KEY,
-            "q": f"{city},{country_code}",
+            "q": query,
             "lang": "es",  # Respuestas en español
             "aqi": "no"  # No incluir calidad del aire
         }
@@ -67,8 +77,13 @@ def get_weather(city: str = "Madrid", country_code: str = "ES"):
         if response.status_code == 400:
             error_data = response.json() if response.text else {}
             error_message = error_data.get("error", {}).get("message", "Solicitud inválida")
+            location_label = (
+                f"{latitude},{longitude}"
+                if latitude is not None and longitude is not None
+                else city
+            )
             return {
-                "error": f"No se encontró la ciudad '{city}'. {error_message}",
+                "error": f"No se encontró la ubicación '{location_label}'. {error_message}",
                 "weather": None
             }
         elif response.status_code == 401 or response.status_code == 403:

@@ -59,13 +59,28 @@ def obtener_clima(ciudad: str = "") -> str:
     Args:
         ciudad: Nombre de la ciudad. El usuario puede especificar cualquier ciudad de España
                 como Madrid, Barcelona, Valencia, Sevilla, etc. Si no se especifica, se usa
-                la ciudad del perfil del usuario.
+                la ubicación GPS del usuario y, si no está disponible, la ciudad del perfil.
 
     Returns:
         Información del clima formateada lista para presentar al usuario
     """
-    city = ciudad or _user_profile_var.get().get("city") or "Madrid"
-    weather_data = get_weather(city=city, country_code="ES")
+    location = _user_location_var.get() or {}
+    latitude = location.get("latitude")
+    longitude = location.get("longitude")
+    if ciudad:
+        weather_data = get_weather(city=ciudad, country_code="ES")
+    elif latitude is not None and longitude is not None:
+        weather_data = get_weather(
+            city="",
+            country_code="ES",
+            latitude=latitude,
+            longitude=longitude,
+        )
+    else:
+        weather_data = get_weather(
+            city=_user_profile_var.get().get("city") or "Madrid",
+            country_code="ES",
+        )
     return format_weather_for_chat(weather_data)
 
 @tool
@@ -323,7 +338,7 @@ def build_system_message(user_profile: dict = None, tutor_profile: dict = None, 
             f"- Ciudad: {user_profile.get('city', '')}\n\n"
             "INSTRUCCIONES SOBRE EL PERFIL:\n"
             f"- Dirígete al usuario por su nombre ({user_profile.get('name', '')}) de forma natural y cálida.\n"
-            f"- Cuando pregunte por el clima sin especificar ciudad, usa su ciudad ({user_profile.get('city', '')}).\n"
+            "- Cuando pregunte por el clima sin especificar ciudad, usa su ubicación GPS si está disponible.\n"
             "- Ten en cuenta sus intereses y descripción para personalizar tus respuestas y sugerencias.\n"
             "- Usa su número de teléfono solo si necesitas incluirlo en una alerta por SMS.\n\n"
         )
