@@ -21,6 +21,8 @@ from typing import Any, Optional
 
 import httpx
 
+from token_crypto import decrypt_token, encrypt_token
+
 logger = logging.getLogger(__name__)
 
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
@@ -111,6 +113,28 @@ def _basic_auth_header() -> Optional[str]:
     return f"Basic {token}"
 
 
+def _link_access_token(link: dict) -> Optional[str]:
+    cipher = link.get("access_token_cipher")
+    if cipher:
+        try:
+            return decrypt_token(cipher)
+        except Exception as e:
+            logger.error("Failed to decrypt spotify access token: %s", e)
+            return None
+    return link.get("access_token")
+
+
+def _link_refresh_token(link: dict) -> Optional[str]:
+    cipher = link.get("refresh_token_cipher")
+    if cipher:
+        try:
+            return decrypt_token(cipher)
+        except Exception as e:
+            logger.error("Failed to decrypt spotify refresh token: %s", e)
+            return None
+    return link.get("refresh_token")
+
+
 async def _refresh_access_token(user_id: str, refresh_token: str) -> Optional[str]:
     auth_header = _basic_auth_header()
     if not auth_header:
@@ -140,12 +164,14 @@ async def _refresh_access_token(user_id: str, refresh_token: str) -> Optional[st
 
     # Spotify sometimes issues a new refresh token; persist it if so.
     patch: dict[str, Any] = {
-        "access_token": access_token,
+        "access_token": None,
+        "access_token_cipher": encrypt_token(access_token),
         "expires_at": new_expires_at,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     if tokens.get("refresh_token"):
-        patch["refresh_token"] = tokens["refresh_token"]
+        patch["refresh_token"] = None
+        patch["refresh_token_cipher"] = encrypt_token(tokens["refresh_token"])
 
     await _update_link(user_id, patch)
     return access_token
@@ -158,15 +184,15 @@ async def _get_valid_access_token(user_id: str) -> tuple[Optional[str], Optional
         return None, None
 
     if _is_expired(link.get("expires_at")):
-        refresh_token = link.get("refresh_token")
+        refresh_token = _link_refresh_token(link)
         if not refresh_token:
             return None, link
         new_access = await _refresh_access_token(user_id, refresh_token)
         if not new_access:
             return None, link
-        link["access_token"] = new_access
+        return new_access, link
 
-    return link["access_token"], link
+    return _link_access_token(link), link
 
 
 # ---------------------------------------------------------------------------

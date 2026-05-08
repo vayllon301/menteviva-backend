@@ -18,6 +18,8 @@ from typing import Any, Optional
 
 import httpx
 
+from token_crypto import decrypt_token, encrypt_token
+
 logger = logging.getLogger(__name__)
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -97,6 +99,31 @@ def _is_expired(expires_at: Optional[str]) -> bool:
     return datetime.now(timezone.utc) >= dt - timedelta(seconds=60)
 
 
+def _link_access_token(link: dict) -> Optional[str]:
+    """Return plaintext access token from a user_social_links row, preferring
+    the encrypted column. Falls back to legacy plaintext while migration is
+    incomplete."""
+    cipher = link.get("access_token_cipher")
+    if cipher:
+        try:
+            return decrypt_token(cipher)
+        except Exception as e:
+            logger.error("Failed to decrypt google access token: %s", e)
+            return None
+    return link.get("access_token")
+
+
+def _link_refresh_token(link: dict) -> Optional[str]:
+    cipher = link.get("refresh_token_cipher")
+    if cipher:
+        try:
+            return decrypt_token(cipher)
+        except Exception as e:
+            logger.error("Failed to decrypt google refresh token: %s", e)
+            return None
+    return link.get("refresh_token")
+
+
 async def _refresh_access_token(user_id: str, refresh_token: str) -> Optional[str]:
     client_id = os.getenv("GOOGLE_OAUTH_CLIENT_ID")
     client_secret = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET")
@@ -124,7 +151,8 @@ async def _refresh_access_token(user_id: str, refresh_token: str) -> Optional[st
     new_expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat()
 
     await _update_link(user_id, {
-        "access_token": access_token,
+        "access_token": None,
+        "access_token_cipher": encrypt_token(access_token),
         "expires_at": new_expires_at,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     })
@@ -138,15 +166,15 @@ async def _get_valid_access_token(user_id: str) -> tuple[Optional[str], Optional
         return None, None
 
     if _is_expired(link.get("expires_at")):
-        refresh_token = link.get("refresh_token")
+        refresh_token = _link_refresh_token(link)
         if not refresh_token:
             return None, link
         new_access = await _refresh_access_token(user_id, refresh_token)
         if not new_access:
             return None, link
-        link["access_token"] = new_access
+        return new_access, link
 
-    return link["access_token"], link
+    return _link_access_token(link), link
 
 
 # ---------------------------------------------------------------------------

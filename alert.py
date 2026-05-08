@@ -4,6 +4,8 @@ import os
 from twilio.rest import Client
 from twilio.base.exceptions import TwilioRestException
 
+from user_context import fetch_tutor_profile, fetch_user_profile
+
 load_dotenv()
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
@@ -100,3 +102,31 @@ def send_sms_alert(
             "error": f"Error inesperado: {str(e)}",
             "alert": None,
         }
+
+
+async def send_sms_alert_for_user(
+    user_id: str,
+    latitude: Optional[float] = None,
+    longitude: Optional[float] = None,
+    description: Optional[str] = None,
+) -> dict:
+    """Resolve the tutor recipient from the authenticated user's profile and
+    send the alert. The recipient is NEVER taken from the request body."""
+    tutor = await fetch_tutor_profile(user_id)
+    tutor_number = (tutor or {}).get("number")
+    if not tutor_number:
+        return {
+            "error": "No se ha configurado un numero de tutor para este usuario.",
+            "alert": None,
+        }
+
+    profile = await fetch_user_profile(user_id)
+    user_name = (profile or {}).get("name")
+
+    return send_sms_alert(
+        to=tutor_number,
+        user_name=user_name,
+        latitude=latitude,
+        longitude=longitude,
+        description=description,
+    )

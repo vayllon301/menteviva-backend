@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Optional, List
 from zoneinfo import ZoneInfo
-from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Header, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Depends, Header, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 import websockets as websockets_client
 from pydantic import BaseModel
@@ -20,7 +20,7 @@ from spanish_newspapers import (
 )
 from voice import process_voice_message, transcribe_audio, text_to_speech
 from tool_registry import REALTIME_TOOLS, execute_tool
-from alert import send_sms_alert
+from alert import send_sms_alert_for_user
 from memory_service import run_memory_pipeline
 from social_google import get_status as google_get_status, get_user_data as google_get_user_data
 from spotify import get_status as spotify_get_status, get_user_data as spotify_get_user_data
@@ -32,8 +32,28 @@ from reminders import (
     mark_notification_read,
 )
 from reminder_scheduler import scheduler_loop, run_tick
+from auth import get_current_user_id, resolve_user_id_from_jwt
+from rate_limit import check as rate_check
+from user_context import (
+    fetch_user_profile,
+    fetch_tutor_profile,
+    fetch_user_memory,
+)
 import base64
 import json
+
+MAX_AUDIO_BYTES = 25 * 1024 * 1024  # 25 MB cap shared with the front-end
+
+
+def _enforce_rate_limit(scope: str, user_id: str, limit: int, window_seconds: float) -> None:
+    allowed, _, reset_at = rate_check(f"{scope}:{user_id}", limit, window_seconds)
+    if not allowed:
+        retry = max(1, int(reset_at - __import__("time").time()))
+        raise HTTPException(
+            status_code=429,
+            detail="Has alcanzado el limite de peticiones. Intenta mas tarde.",
+            headers={"Retry-After": str(retry)},
+        )
 
 
 @asynccontextmanager
@@ -55,44 +75,21 @@ app = FastAPI(lifespan=lifespan)
 SCHEDULER_SECRET = os.getenv("SCHEDULER_SECRET", "")
 
 class AlertRequest(BaseModel):
-    to: Optional[str] = None
-    user_name: Optional[str] = None
+    # `to` is intentionally absent — the recipient is always derived from the
+    # authenticated user's tutor profile so a caller cannot redirect SMS.
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     description: Optional[str] = None
 
-class UserProfile(BaseModel):
-    name: str
-    number: Optional[str] = None
-    description: Optional[str] = None
-    interests: Optional[str] = None
-    city: Optional[str] = None
-
-class TutorProfile(BaseModel):
-    name: str
-    number: Optional[str] = None
-    description: Optional[str] = None
-    facebook: Optional[str] = None
-    relationship: Optional[str] = None
-    factors: Optional[str] = None
 
 class ChatRequest(BaseModel):
     message: str
     history: List[dict] = []
-    user_id: Optional[str] = None
-    user_profile: Optional[UserProfile] = None
-    tutor_profile: Optional[TutorProfile] = None
-    user_memory: Optional[dict] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 
-class MemorySummarizeRequest(BaseModel):
-    user_id: str
-    messages: List[dict]
-
 
 class ReminderCreateRequest(BaseModel):
-    user_id: str
     message: str
     remind_at: str
     recurrence: Optional[str] = None
@@ -102,6 +99,11 @@ class ReminderCreateRequest(BaseModel):
 class ReminderSnoozeRequest(BaseModel):
     minutes: int = 10
 
+
+class MemorySummarizeRequest(BaseModel):
+    messages: List[dict]
+
+
 @app.get("/")
 async def root():
     return {"message": "Hola Mundo"}
@@ -110,28 +112,40 @@ async def root():
 async def health():
     return {"message": "saludable"}
 
-@app.post("/chat")
-async def chat(request: ChatRequest):
-    profile = request.user_profile.model_dump() if request.user_profile else {}
-    if request.user_id:
-        profile["id"] = request.user_id
-    tutor = request.tutor_profile.model_dump() if request.tutor_profile else None
+async def _build_chat_context(user_id: str, latitude, longitude):
+    profile = await fetch_user_profile(user_id) or {}
+    profile["id"] = user_id
+    tutor = await fetch_tutor_profile(user_id)
+    memory = await fetch_user_memory(user_id)
     user_location = {}
-    if request.latitude is not None and request.longitude is not None:
-        user_location = {"latitude": request.latitude, "longitude": request.longitude}
-    response = await chatbot_async(request.message, history=request.history, user_profile=profile or None, tutor_profile=tutor, user_memory=request.user_memory, user_location=user_location)
+    if latitude is not None and longitude is not None:
+        user_location = {"latitude": latitude, "longitude": longitude}
+    return profile, tutor, memory, user_location
+
+
+@app.post("/chat")
+async def chat(request: ChatRequest, user_id: str = Depends(get_current_user_id)):
+    _enforce_rate_limit("chat", user_id, 60, 3600)
+    profile, tutor, memory, user_location = await _build_chat_context(
+        user_id, request.latitude, request.longitude,
+    )
+    response = await chatbot_async(
+        request.message,
+        history=request.history,
+        user_profile=profile or None,
+        tutor_profile=tutor,
+        user_memory=memory,
+        user_location=user_location,
+    )
     return {"response": response}
 
 
 @app.post("/chat/stream")
-async def chat_stream(request: ChatRequest):
-    profile = request.user_profile.model_dump() if request.user_profile else {}
-    if request.user_id:
-        profile["id"] = request.user_id
-    tutor = request.tutor_profile.model_dump() if request.tutor_profile else None
-    user_location = {}
-    if request.latitude is not None and request.longitude is not None:
-        user_location = {"latitude": request.latitude, "longitude": request.longitude}
+async def chat_stream(request: ChatRequest, user_id: str = Depends(get_current_user_id)):
+    _enforce_rate_limit("chat", user_id, 60, 3600)
+    profile, tutor, memory, user_location = await _build_chat_context(
+        user_id, request.latitude, request.longitude,
+    )
 
     async def event_generator():
         try:
@@ -140,10 +154,9 @@ async def chat_stream(request: ChatRequest):
                 history=request.history,
                 user_profile=profile,
                 tutor_profile=tutor,
-                user_memory=request.user_memory,
+                user_memory=memory,
                 user_location=user_location,
             ):
-                # SSE format: each event is "data: <content>\n\n"
                 yield f"data: {json.dumps({'token': token})}\n\n"
             yield "data: [DONE]\n\n"
         except Exception as e:
@@ -161,23 +174,28 @@ async def chat_stream(request: ChatRequest):
 
 
 @app.post("/memory/summarize", status_code=202)
-async def summarize_memory(request: MemorySummarizeRequest, background_tasks: BackgroundTasks):
-    background_tasks.add_task(run_memory_pipeline, request.user_id, request.messages)
+async def summarize_memory(
+    request: MemorySummarizeRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_current_user_id),
+):
+    background_tasks.add_task(run_memory_pipeline, user_id, request.messages)
     return {"status": "accepted"}
 
 
-@app.get("/reminders/{user_id}")
-async def get_reminders(user_id: str):
-    """List active reminders for a user."""
+@app.get("/reminders")
+async def get_reminders(user_id: str = Depends(get_current_user_id)):
     reminders_list = await list_active_reminders(user_id)
     return {"reminders": reminders_list}
 
 
 @app.post("/reminders")
-async def post_reminder(request: ReminderCreateRequest):
-    """Create a reminder (used by tutor dashboard)."""
+async def post_reminder(
+    request: ReminderCreateRequest,
+    user_id: str = Depends(get_current_user_id),
+):
     result = await create_reminder(
-        user_id=request.user_id,
+        user_id=user_id,
         message=request.message,
         remind_at=request.remind_at,
         recurrence=request.recurrence,
@@ -187,8 +205,11 @@ async def post_reminder(request: ReminderCreateRequest):
 
 
 @app.patch("/reminders/{reminder_id}/snooze")
-async def snooze_reminder(reminder_id: str, request: ReminderSnoozeRequest):
-    """Snooze a reminder by N minutes."""
+async def snooze_reminder(
+    reminder_id: str,
+    request: ReminderSnoozeRequest,
+    user_id: str = Depends(get_current_user_id),
+):
     from datetime import datetime, timedelta, timezone
 
     new_time = datetime.now(timezone.utc) + timedelta(minutes=request.minutes)
@@ -200,22 +221,25 @@ async def snooze_reminder(reminder_id: str, request: ReminderSnoozeRequest):
 
 
 @app.patch("/reminders/{reminder_id}/dismiss")
-async def dismiss_reminder(reminder_id: str):
-    """Dismiss (complete) a reminder."""
+async def dismiss_reminder(
+    reminder_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
     await update_reminder(reminder_id, {"status": "completed"})
     return {"status": "completed"}
 
 
-@app.get("/notifications/{user_id}")
-async def get_notifications(user_id: str):
-    """Get unread notifications for the in-app popup."""
+@app.get("/notifications")
+async def get_notifications(user_id: str = Depends(get_current_user_id)):
     notifications = await get_unread_notifications(user_id)
     return {"notifications": notifications}
 
 
 @app.patch("/notifications/{notification_id}/read")
-async def read_notification(notification_id: str):
-    """Mark a notification as read."""
+async def read_notification(
+    notification_id: str,
+    user_id: str = Depends(get_current_user_id),
+):
     await mark_notification_read(notification_id)
     return {"status": "read"}
 
@@ -341,69 +365,79 @@ async def newspaper_by_source(source_key: str, limit: int = 10):
     return news_data
 
 @app.post("/alert")
-async def alert(request: AlertRequest):
-    """
-    Envía una alerta por SMS usando Twilio.
+async def alert(
+    request: AlertRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    """Send an SMS alert. Recipient is always the authenticated user's tutor.
 
-    Args:
-        request: JSON con campos opcionales: to, user_name, latitude, longitude, description
-
-    Returns:
-        JSON con el resultado del envío
+    The body must NOT contain a `to` field — Pydantic will simply ignore one
+    if provided. Throttled per user to prevent toll-fraud-style abuse.
     """
-    result = send_sms_alert(
-        to=request.to,
-        user_name=request.user_name,
+    _enforce_rate_limit("alert", user_id, 5, 3600)
+    description = (request.description or "").strip()[:500] or None
+    result = await send_sms_alert_for_user(
+        user_id=user_id,
         latitude=request.latitude,
         longitude=request.longitude,
-        description=request.description,
+        description=description,
     )
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])
     return result
 
 
-@app.get("/social/google/{user_id}/status")
-async def social_google_status(user_id: str):
-    """Whether the user has linked their Google account, and which scopes."""
+@app.get("/social/google/status")
+async def social_google_status(user_id: str = Depends(get_current_user_id)):
     return await google_get_status(user_id)
 
 
-@app.get("/social/google/{user_id}/data")
-async def social_google_data(user_id: str, kind: str = "all"):
-    """Fetch Calendar events + YouTube subscriptions for a linked user.
-
-    `kind` filters which slice to fetch: `all`, `calendar`, `youtube`.
-    """
+@app.get("/social/google/data")
+async def social_google_data(
+    kind: str = "all",
+    user_id: str = Depends(get_current_user_id),
+):
     if kind not in ("all", "calendar", "youtube"):
         raise HTTPException(status_code=400, detail="kind inválido")
     return await google_get_user_data(user_id, kind=kind)
 
 
-@app.get("/social/spotify/{user_id}/status")
-async def social_spotify_status(user_id: str):
-    """Whether the user has linked their Spotify account, and which scopes."""
+@app.get("/social/spotify/status")
+async def social_spotify_status(user_id: str = Depends(get_current_user_id)):
     return await spotify_get_status(user_id)
 
 
-@app.get("/social/spotify/{user_id}/data")
-async def social_spotify_data(user_id: str, kind: str = "all"):
-    """Fetch top artists + recently played + playlists for a linked user.
-
-    `kind` filters which slice to fetch: `all`, `top`, `recent`, `playlists`.
-    """
+@app.get("/social/spotify/data")
+async def social_spotify_data(
+    kind: str = "all",
+    user_id: str = Depends(get_current_user_id),
+):
     if kind not in ("all", "top", "recent", "playlists"):
         raise HTTPException(status_code=400, detail="kind inválido")
     return await spotify_get_user_data(user_id, kind=kind)
 
 
+def _check_audio_size(content_length: Optional[str]) -> None:
+    if content_length is not None:
+        try:
+            length = int(content_length)
+        except ValueError:
+            length = 0
+        if length > MAX_AUDIO_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="Audio demasiado grande",
+            )
+
+
 @app.post("/voice/transcribe")
 async def voice_transcribe(
+    request: Request,
     audio: UploadFile = File(...),
+    user_id: str = Depends(get_current_user_id),
 ):
-    """
-    Transcribe audio a texto (solo STT). Endpoint rápido (~1-2s).
-    """
+    _enforce_rate_limit("voice", user_id, 60, 3600)
+    _check_audio_size(request.headers.get("content-length"))
     try:
         if not audio.content_type or (
             not audio.content_type.startswith('audio') and
@@ -411,14 +445,23 @@ async def voice_transcribe(
         ):
             raise HTTPException(
                 status_code=400,
-                detail="El archivo debe ser de tipo audio o video/webm"
+                detail="El archivo debe ser de tipo audio o video/webm",
             )
 
-        audio_bytes = await audio.read()
+        # Stream-read with a hard cap; abort if the stream exceeds MAX_AUDIO_BYTES.
+        audio_bytes = bytearray()
+        while True:
+            chunk = await audio.read(64 * 1024)
+            if not chunk:
+                break
+            audio_bytes.extend(chunk)
+            if len(audio_bytes) > MAX_AUDIO_BYTES:
+                raise HTTPException(status_code=413, detail="Audio demasiado grande")
+
         if len(audio_bytes) == 0:
             raise HTTPException(status_code=400, detail="El archivo de audio está vacío")
 
-        transcribed_text = await transcribe_audio(audio_bytes)
+        transcribed_text = await transcribe_audio(bytes(audio_bytes))
         return {"text": transcribed_text}
 
     except HTTPException:
@@ -431,21 +474,26 @@ class TTSRequest(BaseModel):
     text: str
     voice: str = "nova"
 
-@app.post("/voice/tts")
-async def voice_tts(request: TTSRequest):
-    """
-    Convierte texto a audio (solo TTS). Endpoint rápido (~1-2s).
-    """
-    try:
-        if not request.text.strip():
-            raise HTTPException(status_code=400, detail="El texto no puede estar vacío")
 
-        audio_bytes = await text_to_speech(request.text, voice=request.voice)
+@app.post("/voice/tts")
+async def voice_tts(
+    request: TTSRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    _enforce_rate_limit("tts", user_id, 60, 3600)
+    try:
+        text = request.text.strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="El texto no puede estar vacío")
+        if len(text) > 2000:
+            raise HTTPException(status_code=413, detail="Texto demasiado largo")
+
+        audio_bytes = await text_to_speech(text, voice=request.voice)
         audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
 
         return {
             "audio": audio_base64,
-            "audioType": "audio/ogg"
+            "audioType": "audio/ogg",
         }
 
     except HTTPException:
@@ -455,10 +503,6 @@ async def voice_tts(request: TTSRequest):
 
 
 class RealtimeSessionRequest(BaseModel):
-    user_id: Optional[str] = None
-    user_profile: Optional[UserProfile] = None
-    tutor_profile: Optional[TutorProfile] = None
-    user_memory: Optional[dict] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 
@@ -466,9 +510,6 @@ class RealtimeSessionRequest(BaseModel):
 class RealtimeToolRequest(BaseModel):
     name: str
     arguments: Optional[Any] = None
-    user_id: Optional[str] = None
-    user_profile: Optional[UserProfile] = None
-    tutor_profile: Optional[TutorProfile] = None
     latitude: Optional[float] = None
     longitude: Optional[float] = None
 
@@ -690,18 +731,21 @@ async def realtime_ws(ws: WebSocket):
         await ws.close()
         return
 
-    profile = init_msg.get("user_profile")
-    if not isinstance(profile, dict):
-        profile = {}
+    # The first message MUST carry a Supabase JWT — never trust user_id /
+    # profile / tutor / memory shipped from the client.
+    token = init_msg.get("token")
+    user_id = await resolve_user_id_from_jwt(token)
+    if not user_id:
+        await ws.send_json(
+            {"type": "error", "error": {"message": "Token de autenticacion invalido"}}
+        )
+        await ws.close()
+        return
 
-    tutor = init_msg.get("tutor_profile")
-    if not isinstance(tutor, dict):
-        tutor = {}
-
-    memory = init_msg.get("user_memory")
-    user_id = init_msg.get("user_id") or profile.get("id")
-    if user_id and not profile.get("id"):
-        profile["id"] = user_id
+    profile = await fetch_user_profile(user_id) or {}
+    profile["id"] = user_id
+    tutor = await fetch_tutor_profile(user_id) or {}
+    memory = await fetch_user_memory(user_id)
 
     user_location = {}
     latitude = init_msg.get("latitude")
@@ -795,12 +839,11 @@ async def realtime_ws(ws: WebSocket):
 
 
 @app.post("/realtime/session")
-async def realtime_session(request: RealtimeSessionRequest):
-    """
-    Returns the metadata the browser needs to open the realtime WebSocket.
-    Kept as POST so the same /api/realtime/session Next.js proxy keeps working;
-    the response shape changed from SDP to a small JSON config.
-    """
+async def realtime_session(
+    request: RealtimeSessionRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    _enforce_rate_limit("rt-session", user_id, 30, 3600)
     if not _get_xai_api_key():
         raise HTTPException(
             status_code=500, detail="XAI_API_KEY no configurada (o X_API_KEY)"
@@ -816,22 +859,20 @@ async def realtime_session(request: RealtimeSessionRequest):
 
 
 @app.post("/realtime/tool")
-async def realtime_tool(request: RealtimeToolRequest):
-    """
-    Execute a tool by name. Called by the frontend whenever the Realtime model
-    emits a function_call event. Result is sent back to the model as a
-    conversation.item.create with type=function_call_output.
-    """
-    profile = request.user_profile.model_dump() if request.user_profile else {}
-    if request.user_id:
-        profile["id"] = request.user_id
-    tutor = request.tutor_profile.model_dump() if request.tutor_profile else {}
+async def realtime_tool(
+    request: RealtimeToolRequest,
+    user_id: str = Depends(get_current_user_id),
+):
+    _enforce_rate_limit("rt-tool", user_id, 60, 3600)
+    profile = await fetch_user_profile(user_id) or {}
+    profile["id"] = user_id
+    tutor = await fetch_tutor_profile(user_id) or {}
     user_location = {}
     if request.latitude is not None and request.longitude is not None:
         user_location = {"latitude": request.latitude, "longitude": request.longitude}
 
     context = {
-        "user_id": request.user_id,
+        "user_id": user_id,
         "user_profile": profile,
         "tutor_profile": tutor,
         "user_location": user_location,
@@ -842,15 +883,20 @@ async def realtime_tool(request: RealtimeToolRequest):
 
 @app.post("/voice")
 async def voice(
+    request: Request,
     audio: UploadFile = File(...),
     voice_name: str = "nova",
     history: str = None,
-    user_profile_json: str = None,
+    user_id: str = Depends(get_current_user_id),
 ):
+    """Voice pipeline (STT -> Chatbot -> TTS).
+
+    The chatbot context is rebuilt server-side from the authenticated user.
+    The optional `history` form field is still accepted but `user_profile_json`
+    has been removed because it could be spoofed.
     """
-    Pipeline completo de voz (STT → Chatbot → TTS).
-    Acepta historial y perfil de usuario para respuestas contextuales.
-    """
+    _enforce_rate_limit("voice-pipe", user_id, 60, 3600)
+    _check_audio_size(request.headers.get("content-length"))
     try:
         if not audio.content_type or (
             not audio.content_type.startswith('audio') and
@@ -858,32 +904,36 @@ async def voice(
         ):
             raise HTTPException(
                 status_code=400,
-                detail="El archivo debe ser de tipo audio o video/webm"
+                detail="El archivo debe ser de tipo audio o video/webm",
             )
 
-        audio_bytes = await audio.read()
+        audio_bytes = bytearray()
+        while True:
+            chunk = await audio.read(64 * 1024)
+            if not chunk:
+                break
+            audio_bytes.extend(chunk)
+            if len(audio_bytes) > MAX_AUDIO_BYTES:
+                raise HTTPException(status_code=413, detail="Audio demasiado grande")
+
         if len(audio_bytes) == 0:
             raise HTTPException(status_code=400, detail="El archivo de audio está vacío")
 
-        # Parse optional history and profile from form data
         parsed_history = None
-        parsed_profile = None
         if history:
             try:
                 parsed_history = json.loads(history)
             except json.JSONDecodeError:
                 pass
-        if user_profile_json:
-            try:
-                parsed_profile = json.loads(user_profile_json)
-            except json.JSONDecodeError:
-                pass
+
+        profile = await fetch_user_profile(user_id) or {}
+        profile["id"] = user_id
 
         response_audio, transcribed_text, chatbot_response = await process_voice_message(
-            audio_bytes,
+            bytes(audio_bytes),
             voice=voice_name,
             history=parsed_history,
-            user_profile=parsed_profile
+            user_profile=profile,
         )
 
         audio_base64 = base64.b64encode(response_audio).decode("utf-8")
@@ -892,7 +942,7 @@ async def voice(
             "text": transcribed_text,
             "response": chatbot_response,
             "audio": audio_base64,
-            "audioType": "audio/ogg"
+            "audioType": "audio/ogg",
         }
 
     except HTTPException:
