@@ -27,6 +27,12 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
 
+      - name: Export requirements for Azure Oryx
+        run: uv export --frozen --no-dev --no-emit-workspace --no-annotate -o requirements.txt
+
+      - name: Verify deployment dependencies
+        run: grep -q '^cryptography==' requirements.txt
+
       # 🛠️ Validate deps before deploy
       # - uv.lock: frozen install same as local dev
       # - requirements.txt: must stay in repo — Azure Oryx uses pip -r requirements.txt when present (reliable on App Service)
@@ -76,4 +82,3 @@ jobs:
         with:
           app-name: 'backendcv'
           slot-name: 'Production'
-          
