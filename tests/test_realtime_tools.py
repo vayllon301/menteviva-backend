@@ -59,17 +59,4 @@ def test_realtime_session_defaults_to_backend_tool_handler(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["tool_call_handler"] == "backend"
-    assert response.json()["voice"] == "ara"
-
-
-def test_realtime_session_config_declares_audio_and_sensitive_vad() -> None:
-    import main
-
-    config = main._build_realtime_session({}, {}, {})
-
-    assert config["audio"] == {
-        "input": {"format": {"type": "audio/pcm", "rate": 24000}},
-        "output": {"format": {"type": "audio/pcm", "rate": 24000}},
-    }
-    assert config["turn_detection"]["type"] == "server_vad"
-    assert config["turn_detection"]["threshold"] == 0.35
+    assert response.json()["voice"] == "c630b236"

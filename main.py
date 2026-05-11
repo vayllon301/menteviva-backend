@@ -603,7 +603,7 @@ def _build_realtime_instructions(
 
 XAI_REALTIME_URL = os.getenv("XAI_REALTIME_URL", "wss://api.x.ai/v1/realtime")
 XAI_REALTIME_MODEL = os.getenv("XAI_REALTIME_MODEL", "grok-voice-think-fast-1.0")
-XAI_REALTIME_VOICE = os.getenv("XAI_REALTIME_VOICE", "ara")
+XAI_REALTIME_VOICE = os.getenv("XAI_REALTIME_VOICE", "c630b236")
 
 
 def _get_xai_api_key() -> Optional[str]:
@@ -620,16 +620,7 @@ def _build_realtime_session(
     return {
         "voice": XAI_REALTIME_VOICE,
         "instructions": instructions,
-        "audio": {
-            "input": {"format": {"type": "audio/pcm", "rate": 24000}},
-            "output": {"format": {"type": "audio/pcm", "rate": 24000}},
-        },
-        "turn_detection": {
-            "type": "server_vad",
-            "threshold": 0.35,
-            "silence_duration_ms": 700,
-            "prefix_padding_ms": 500,
-        },
+        "turn_detection": {"type": "server_vad"},
         "tools": REALTIME_TOOLS,
     }
 
