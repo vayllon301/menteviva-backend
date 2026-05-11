@@ -49,9 +49,27 @@ def test_realtime_session_defaults_to_backend_tool_handler(monkeypatch) -> None:
     import main
 
     monkeypatch.setattr(main, "_get_xai_api_key", lambda: "test-key")
+    main.app.dependency_overrides[main.get_current_user_id] = lambda: "user-123"
 
-    with TestClient(main.app) as client:
-        response = client.post("/realtime/session", json={})
+    try:
+        with TestClient(main.app) as client:
+            response = client.post("/realtime/session", json={})
+    finally:
+        main.app.dependency_overrides.clear()
 
     assert response.status_code == 200
     assert response.json()["tool_call_handler"] == "backend"
+    assert response.json()["voice"] == "ara"
+
+
+def test_realtime_session_config_declares_audio_and_sensitive_vad() -> None:
+    import main
+
+    config = main._build_realtime_session({}, {}, {})
+
+    assert config["audio"] == {
+        "input": {"format": {"type": "audio/pcm", "rate": 24000}},
+        "output": {"format": {"type": "audio/pcm", "rate": 24000}},
+    }
+    assert config["turn_detection"]["type"] == "server_vad"
+    assert config["turn_detection"]["threshold"] == 0.35

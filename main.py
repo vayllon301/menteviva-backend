@@ -603,7 +603,7 @@ def _build_realtime_instructions(
 
 XAI_REALTIME_URL = os.getenv("XAI_REALTIME_URL", "wss://api.x.ai/v1/realtime")
 XAI_REALTIME_MODEL = os.getenv("XAI_REALTIME_MODEL", "grok-voice-think-fast-1.0")
-XAI_REALTIME_VOICE = os.getenv("XAI_REALTIME_VOICE", "c630b236")
+XAI_REALTIME_VOICE = os.getenv("XAI_REALTIME_VOICE", "ara")
 
 
 def _get_xai_api_key() -> Optional[str]:
@@ -620,7 +620,16 @@ def _build_realtime_session(
     return {
         "voice": XAI_REALTIME_VOICE,
         "instructions": instructions,
-        "turn_detection": {"type": "server_vad"},
+        "audio": {
+            "input": {"format": {"type": "audio/pcm", "rate": 24000}},
+            "output": {"format": {"type": "audio/pcm", "rate": 24000}},
+        },
+        "turn_detection": {
+            "type": "server_vad",
+            "threshold": 0.35,
+            "silence_duration_ms": 700,
+            "prefix_padding_ms": 500,
+        },
         "tools": REALTIME_TOOLS,
     }
 
@@ -785,7 +794,28 @@ async def realtime_ws(ws: WebSocket):
                         await xai_ws.send(msg)
                 except WebSocketDisconnect:
                     return
-                except Exception:
+                except websockets_client.ConnectionClosed as e:
+                    try:
+                        await ws.send_json(
+                            {
+                                "type": "relay.upstream_closed",
+                                "code": getattr(e, "code", None),
+                                "reason": getattr(e, "reason", ""),
+                            }
+                        )
+                    except Exception:
+                        pass
+                    return
+                except Exception as e:
+                    try:
+                        await ws.send_json(
+                            {
+                                "type": "relay.error",
+                                "error": {"message": f"client_to_xai: {e}"},
+                            }
+                        )
+                    except Exception:
+                        pass
                     return
 
             async def xai_to_client():
@@ -811,10 +841,32 @@ async def realtime_ws(ws: WebSocket):
                                             tool_call=tool_call,
                                             context=tool_context,
                                         )
-                        await ws.send_text(msg)
-                except websockets_client.ConnectionClosed:
+                        try:
+                            await ws.send_text(msg)
+                        except Exception:
+                            return
+                except websockets_client.ConnectionClosed as e:
+                    try:
+                        await ws.send_json(
+                            {
+                                "type": "relay.upstream_closed",
+                                "code": getattr(e, "code", None),
+                                "reason": getattr(e, "reason", ""),
+                            }
+                        )
+                    except Exception:
+                        pass
                     return
-                except Exception:
+                except Exception as e:
+                    try:
+                        await ws.send_json(
+                            {
+                                "type": "relay.error",
+                                "error": {"message": f"xai_to_client: {e}"},
+                            }
+                        )
+                    except Exception:
+                        pass
                     return
 
             done, pending = await asyncio.wait(
